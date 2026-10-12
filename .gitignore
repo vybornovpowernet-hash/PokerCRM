@@ -31,3 +31,15 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Local dev / agent tooling (not shipped to users)
+.agents/
+.claude/
+.opencode/
+AGENTS.md
+skills-lock.json
+start-app.bat
+tasks/
+docs/
+referense/
+Примеры отчетов/
