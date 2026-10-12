@@ -1,10 +1,34 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import AdmZip from 'adm-zip'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { createApp } from '../src/app.js'
-import { REPOSITORY, checkForUpdates, compareVersions, getAppVersion } from '../src/services/system.js'
+import {
+  REPOSITORY,
+  UPDATE_TMP_DIR,
+  checkForUpdates,
+  compareVersions,
+  downloadAndStageUpdate,
+  getAppVersion,
+  resolveArchiveEntry,
+  updateScriptContents
+} from '../src/services/system.js'
+
+vi.mock('../src/services/system.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/system.js')>()
+  return { ...actual, runInPlaceUpdate: vi.fn().mockResolvedValue({ files: 3 }) }
+})
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
+function zipResponse(entries: Record<string, string>): Response {
+  const zip = new AdmZip()
+  for (const [name, content] of Object.entries(entries)) zip.addFile(name, Buffer.from(content))
+  return new Response(zip.toBuffer(), { status: 200 })
 }
 
 describe('compareVersions', () => {
@@ -110,5 +134,109 @@ describe('system API', () => {
     const res = await app.inject({ method: 'GET', url: '/api/system/check-updates' })
     expect(res.statusCode).toBe(502)
     expect(JSON.parse(res.body).error).toContain('GitHub')
+  })
+
+  it('POST /api/system/update stages the update and reports how many files were readied', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/system/update' })
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, files: 3 })
+  })
+})
+
+describe('resolveArchiveEntry', () => {
+  it('joins safe relative paths inside the base directory', () => {
+    expect(resolveArchiveEntry('/base', 'client/src/main.tsx')).toBe(join('/base', 'client', 'src', 'main.tsx'))
+    expect(resolveArchiveEntry('/base', 'a\\b.txt')).toBe(join('/base', 'a', 'b.txt'))
+  })
+
+  it('rejects traversal, absolute and drive-qualified entries', () => {
+    expect(resolveArchiveEntry('/base', '../evil.txt')).toBeNull()
+    expect(resolveArchiveEntry('/base', 'a/../../evil.txt')).toBeNull()
+    expect(resolveArchiveEntry('/base', '/etc/passwd')).toBeNull()
+    expect(resolveArchiveEntry('/base', 'C:\\Windows\\x.dll')).toBeNull()
+    expect(resolveArchiveEntry('/base', '..')).toBeNull()
+  })
+})
+
+describe('downloadAndStageUpdate', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('extracts only the app prefix into .update-tmp/extracted', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'poker-update-'))
+    try {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          zipResponse({
+            'PokerCRM-main/package.json': '{"version":"9.9.9"}',
+            'PokerCRM-main/client/src/main.tsx': 'export {}',
+            'PokerCRM-main/.env.example': 'PORT=3001',
+            'other-folder/ignore.txt': 'nope'
+          })
+        )
+      )
+      const result = await downloadAndStageUpdate(root)
+      expect(result.files).toBe(3)
+      expect(readFileSync(join(root, UPDATE_TMP_DIR, 'extracted', 'package.json'), 'utf8')).toContain('9.9.9')
+      expect(existsSync(join(root, UPDATE_TMP_DIR, 'extracted', 'client', 'src', 'main.tsx'))).toBe(true)
+      expect(existsSync(join(root, UPDATE_TMP_DIR, 'extracted', 'other-folder'))).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('throws a 502 when GitHub returns a non-ok status', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'poker-update-'))
+    try {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 500 })))
+      await expect(downloadAndStageUpdate(root)).rejects.toMatchObject({ status: 502 })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('throws a 502 when the network is unreachable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'poker-update-'))
+    try {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ENOTFOUND')))
+      await expect(downloadAndStageUpdate(root)).rejects.toMatchObject({ status: 502 })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('throws a 502 when the archive carries no app files', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'poker-update-'))
+    try {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(zipResponse({ 'other-folder/file.txt': 'x' })))
+      await expect(downloadAndStageUpdate(root)).rejects.toMatchObject({ status: 502 })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('updateScriptContents', () => {
+  const { bat, sh } = updateScriptContents()
+
+  it('kills the old server by PID on Windows without mass deletion', () => {
+    expect(bat).toContain('taskkill /F /PID %~1 /T')
+    expect(bat).toContain('xcopy')
+    expect(bat).toContain('call "start.bat"')
+    expect(bat).toContain('".env"')
+    expect(bat).not.toMatch(/del\s+\/s/i)
+    expect(bat).not.toMatch(/rmdir\s+\/s\s+\/q\s+\."/i)
+  })
+
+  it('copies over the shell tree while preserving data, logs and config', () => {
+    expect(sh).toContain('kill -9 "$1"')
+    expect(sh).toContain('--exclude data')
+    expect(sh).toContain('--exclude logs')
+    expect(sh).toContain('--exclude .env')
+    expect(sh).not.toContain('--delete')
+    expect(sh).not.toMatch(/rm -rf \*/)
+    expect(sh).toContain('sh ./start.sh')
   })
 })

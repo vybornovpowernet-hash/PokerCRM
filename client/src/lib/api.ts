@@ -14,6 +14,7 @@ import type {
   RoomTemplate,
   SessionDay,
   SessionStatsResult,
+  SystemUpdateResult,
   TimelinePoint,
   TournamentImportEntry,
   TournamentImportResult,
@@ -214,7 +215,8 @@ export const api = {
   },
   system: {
     version: () => request<AppVersionInfo>('/system/version'),
-    checkUpdates: () => request<UpdateCheckResult>('/system/check-updates')
+    checkUpdates: () => request<UpdateCheckResult>('/system/check-updates'),
+    update: () => request<SystemUpdateResult>('/system/update', { method: 'POST', timeoutMs: UPLOAD_TIMEOUT_MS })
   },
   rates: {
     status: () => request<{ usdRub: { date: string; rate: number } | null; eurUsd: { date: string; rate: number } | null; stale: boolean }>('/rates/status')

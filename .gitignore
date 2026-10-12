@@ -25,6 +25,11 @@ logs.txt
 logs.err.txt
 npm-debug.log*
 
+# In-app updater runtime artifacts (generated at update time)
+.update-tmp/
+apply-update.bat
+apply-update.sh
+
 # Stray shell artifacts
 =
 

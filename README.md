@@ -56,6 +56,34 @@ Windows дополнительно открывает браузер на `http:
 3. нажмите **«ОК»**;
 4. после этого разархивируйте папку и запускайте файлы как обычно.
 
+## Установка и обновление
+
+**Установка.** Получите проект и запустите его (Node.js >= 22.5 нужен, см. «Требования»):
+
+```sh
+git clone https://github.com/vybornovpowernet-hash/PokerCRM.git
+cd PokerCRM
+```
+
+Если git не установлен, скачайте архив и распакуйте его:
+
+```powershell
+# Windows (PowerShell), из нужной папки
+powershell -NoProfile -Command "Invoke-WebRequest https://github.com/vybornovpowernet-hash/PokerCRM/archive/refs/heads/main.zip -OutFile PokerCRM.zip; Expand-Archive PokerCRM.zip -DestinationPath . -Force; Remove-Item PokerCRM.zip"
+```
+
+```sh
+# macOS / Linux
+curl -L https://github.com/vybornovpowernet-hash/PokerCRM/archive/refs/heads/main.zip -o PokerCRM.zip && unzip -o PokerCRM.zip && rm PokerCRM.zip
+```
+
+**Обновление.** Самый простой способ — прямо из интерфейса: шестерёнка в правом верхнем углу →
+«Проверить обновление» → «Скачать и обновить». Сервер скачает свежую версию с GitHub, заменит
+файлы приложения (база `data/`, логи `logs/` и `.env` при этом сохраняются), переустановит
+зависимости и перезапустится автоматически.
+
+Вручную то же самое делает `git pull` в папке проекта с последующим перезапуском.
+
 ## Команды
 
 | Команда | Что делает |

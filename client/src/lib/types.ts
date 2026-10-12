@@ -59,6 +59,12 @@ export interface UpdateCheckResult {
   releaseNotes: string | null
 }
 
+export interface SystemUpdateResult {
+  ok: boolean
+  files: number
+  message: string
+}
+
 export type TransactionType = 'deposit' | 'withdraw' | 'transfer' | 'casino'
 export type Direction = 'in' | 'out'
 

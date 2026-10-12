@@ -25,6 +25,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [checking, setChecking] = useState(false)
   const [update, setUpdate] = useState<UpdateCheckResult | null>(null)
   const [checkError, setCheckError] = useState<string | null>(null)
+  const [updating, setUpdating] = useState(false)
+  const [updateError, setUpdateError] = useState<string | null>(null)
 
   useEffect(() => {
     api.settings
@@ -68,6 +70,17 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       .then(setUpdate)
       .catch((e) => setCheckError(e instanceof Error ? e.message : String(e)))
       .finally(() => setChecking(false))
+  }
+
+  const runUpdate = () => {
+    setUpdating(true)
+    setUpdateError(null)
+    api.system
+      .update()
+      .catch((e) => {
+        setUpdating(false)
+        setUpdateError(e instanceof Error ? e.message : String(e))
+      })
   }
 
   return (
@@ -157,6 +170,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   Открыть на GitHub →
                 </a>
               )}
+              {updating ? (
+                <p className="mt-3 flex items-center gap-2 text-xs text-emerald-300">
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-emerald-400/40 border-t-emerald-300" />
+                  Установка обновления… Программа перезапустится автоматически.
+                </p>
+              ) : (
+                <button
+                  onClick={runUpdate}
+                  className="mt-3 w-full rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-emerald-500"
+                >
+                  Скачать и обновить
+                </button>
+              )}
+              {updateError && <p className="mt-2 text-xs text-red-400">{updateError}</p>}
             </div>
           ) : update ? (
             <p className="mt-2 text-xs text-emerald-400">Установлена актуальная версия</p>

@@ -7,9 +7,11 @@
  * build in place sees the fresh number without a restart.
  */
 
-import { readFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import AdmZip from 'adm-zip'
 import { HttpError } from '../lib/errors.js'
 
 const moduleRoot = dirname(fileURLToPath(import.meta.url)) // server/src or server/dist
@@ -18,8 +20,15 @@ const projectRoot = join(moduleRoot, '..', '..')
 export const REPOSITORY = 'vybornovpowernet-hash/PokerCRM'
 
 const GITHUB_LATEST_RELEASE = `https://api.github.com/repos/${REPOSITORY}/releases/latest`
+const GITHUB_ARCHIVE = `https://github.com/${REPOSITORY}/archive/refs/heads/main.zip`
+const ARCHIVE_ROOT = `${REPOSITORY.split('/')[1] ?? 'PokerCRM'}-main`
 const USER_AGENT = 'PokerCRM-UpdateChecker'
 const TIMEOUT_MS = 15_000
+const DOWNLOAD_TIMEOUT_MS = 60_000
+
+export const UPDATE_TMP_DIR = '.update-tmp'
+export const UPDATE_SCRIPT_BAT = 'apply-update.bat'
+export const UPDATE_SCRIPT_SH = 'apply-update.sh'
 
 export interface UpdateCheckResult {
   hasUpdate: boolean
@@ -96,4 +105,161 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
     releaseUrl: typeof body.html_url === 'string' ? body.html_url : null,
     releaseNotes: typeof body.body === 'string' && body.body.trim() !== '' ? body.body : null
   }
+}
+
+/**
+ * Resolves a zip entry path inside `base`, rejecting anything that escapes it
+ * (absolute paths, drive letters, `..` traversal). Returns null for unsafe names
+ * so the caller silently skips them — a compromised archive can never write
+ * outside the staging directory.
+ */
+export function resolveArchiveEntry(base: string, relative: string): string | null {
+  const portable = relative.replace(/\\/g, '/')
+  if (portable.startsWith('/')) return null
+  const parts = portable.split('/').filter((part) => part.length > 0 && part !== '.')
+  if (parts.length === 0 || parts.some((part) => part === '..' || part.includes(':'))) return null
+  return join(base, ...parts)
+}
+
+export interface StageUpdateResult {
+  files: number
+}
+
+/**
+ * Downloads the current `main` branch archive and unpacks the app files into
+ * `<root>/.update-tmp/extracted`, ready for a surgical overwrite by the updater
+ * script. Only entries under the GitHub `<repo>-main/` prefix are taken; nothing
+ * outside the staging directory is ever touched.
+ */
+export async function downloadAndStageUpdate(rootDir: string = projectRoot): Promise<StageUpdateResult> {
+  const tmpDir = join(rootDir, UPDATE_TMP_DIR)
+  const extractDir = join(tmpDir, 'extracted')
+  rmSync(tmpDir, { recursive: true, force: true })
+  mkdirSync(extractDir, { recursive: true })
+
+  let res: Response
+  try {
+    res = await fetch(GITHUB_ARCHIVE, {
+      headers: { 'User-Agent': USER_AGENT },
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
+    })
+  } catch (err) {
+    throw new HttpError(502, `Не удалось скачать обновление: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (!res.ok) {
+    throw new HttpError(502, `GitHub вернул статус ${res.status} при загрузке архива`)
+  }
+
+  let zip: AdmZip
+  try {
+    zip = new AdmZip(Buffer.from(await res.arrayBuffer()))
+  } catch {
+    throw new HttpError(502, 'Архив обновления повреждён')
+  }
+
+  let files = 0
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory) continue
+    const name = entry.entryName.replace(/\\/g, '/')
+    if (!name.startsWith(`${ARCHIVE_ROOT}/`)) continue
+    const target = resolveArchiveEntry(extractDir, name.slice(ARCHIVE_ROOT.length + 1))
+    if (!target) continue
+    mkdirSync(dirname(target), { recursive: true })
+    writeFileSync(target, entry.getData())
+    files += 1
+  }
+
+  if (files === 0) {
+    throw new HttpError(502, 'В архиве обновления нет файлов приложения')
+  }
+  return { files }
+}
+
+/**
+ * The updater scripts are regenerated on every run so a stale copy (or a
+ * tampered one) can never be reused. They wait for the old server to release
+ * its Windows file locks, kill it by PID, copy the staged files over the app
+ * with surgical exclusions (`data`, `logs`, `.env`, the scripts themselves),
+ * then reinstall deps and relaunch. No mass deletion is ever performed.
+ */
+export function updateScriptContents(): { bat: string; sh: string } {
+  const bat = [
+    '@echo off',
+    'chcp 65001 >nul',
+    'cd /d "%~dp0"',
+    '',
+    'echo [PokerCRM] Waiting for the old server to release its file locks...',
+    'timeout /t 3 /nobreak >nul',
+    'if not "%~1"=="" taskkill /F /PID %~1 /T >nul 2>&1',
+    '',
+    'echo [PokerCRM] Copying update files (data, logs and config are kept)...',
+    'xcopy /y /e /c /h /i ".update-tmp\\extracted\\*" "." /XD ".update-tmp" data logs node_modules /XF ".env" "apply-update.bat" "apply-update.sh"',
+    'if errorlevel 1 (',
+    '  echo [PokerCRM] Update copy failed.',
+    '  pause',
+    '  exit /b 1',
+    ')',
+    'rmdir /s /q ".update-tmp"',
+    '',
+    'echo [PokerCRM] Installing dependencies...',
+    'call npm install',
+    '',
+    'echo [PokerCRM] Restarting Poker CRM...',
+    'call "start.bat"',
+    ''
+  ].join('\r\n')
+
+  const sh = [
+    '#!/usr/bin/env sh',
+    'cd "$(dirname "$0")" || exit 1',
+    '',
+    'echo "[PokerCRM] Waiting for the old server to release its file locks..."',
+    'sleep 3',
+    'if [ -n "${1:-}" ]; then',
+    '  kill -9 "$1" 2>/dev/null || true',
+    'fi',
+    '',
+    'echo "[PokerCRM] Copying update files (data, logs and config are kept)..."',
+    'if command -v rsync >/dev/null 2>&1; then',
+    '  rsync -a --exclude .git --exclude data --exclude logs --exclude node_modules --exclude .update-tmp --exclude .env --exclude apply-update.bat --exclude apply-update.sh ".update-tmp/extracted/" ./',
+    'else',
+    '  cp -R ".update-tmp/extracted/." ./',
+    'fi',
+    'rm -rf ".update-tmp"',
+    '',
+    'echo "[PokerCRM] Installing dependencies..."',
+    'npm install',
+    '',
+    'echo "[PokerCRM] Restarting Poker CRM..."',
+    'sh ./start.sh',
+    ''
+  ].join('\n')
+
+  return { bat, sh }
+}
+
+export function writeUpdateScripts(rootDir: string = projectRoot): void {
+  const { bat, sh } = updateScriptContents()
+  writeFileSync(join(rootDir, UPDATE_SCRIPT_BAT), bat, 'utf8')
+  writeFileSync(join(rootDir, UPDATE_SCRIPT_SH), sh, { encoding: 'utf8', mode: 0o755 })
+}
+
+/**
+ * Launches the platform updater as a detached process, handing it the current
+ * pid so it can terminate this server before overwriting files. The caller is
+ * expected to exit right after the response is flushed.
+ */
+export function spawnUpdateScript(pid: number, rootDir: string = projectRoot): void {
+  const child =
+    process.platform === 'win32'
+      ? spawn('cmd.exe', ['/c', UPDATE_SCRIPT_BAT, String(pid)], { cwd: rootDir, detached: true, stdio: 'ignore' })
+      : spawn('sh', [UPDATE_SCRIPT_SH, String(pid)], { cwd: rootDir, detached: true, stdio: 'ignore' })
+  child.unref()
+}
+
+export async function runInPlaceUpdate(pid: number, rootDir: string = projectRoot): Promise<StageUpdateResult> {
+  const result = await downloadAndStageUpdate(rootDir)
+  writeUpdateScripts(rootDir)
+  spawnUpdateScript(pid, rootDir)
+  return result
 }
