@@ -121,6 +121,7 @@ Set sh = CreateObject("WScript.Shell")
 sh.Run "powershell -NoProfile -ExecutionPolicy Bypass -File ""$scriptPath"" -Background", 0, False
 "@
   Set-Content -LiteralPath $autostartFile -Value $vbs -Encoding ASCII
+  Write-AutostartLog "автозапуск включён: $autostartFile -> $scriptPath"
 }
 
 function Disable-Autostart {
@@ -162,7 +163,11 @@ function Show-Menu {
 if ($Background) {
   Write-AutostartLog "автозапуск: жду $bootDelaySeconds c, пока Windows поднимет сеть"
   Start-Sleep -Seconds $bootDelaySeconds
-  Start-Background
+  try {
+    Start-Background
+  } catch {
+    Write-AutostartLog "ОШИБКА автозапуска: $($_.Exception.Message)"
+  }
   return
 }
 
