@@ -1,0 +1,33 @@
+node_modules/
+dist/
+build/
+
+# TypeScript build cache
+.tscache
+*.tsbuildinfo
+
+# Local runtime data
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.db
+
+# Env / secrets
+.env
+.env.local
+
+# Logs
+logs/
+*.log
+logs.txt
+logs.err.txt
+npm-debug.log*
+
+# Stray shell artifacts
+=
+
+# OS
+.DS_Store
+Thumbs.db
