@@ -2815,3 +2815,46 @@ test-driven-development (модель статусов + reconcile-ветки), 
 - UAT: прокрутка вкладки «Турниры» на полном датасете — плавность, `sticky`-шапка, раскрытие деталей,
   фильтры/сортировка работают как раньше.
 
+## 2026-10-12 — Эпик «Portable App & Onboarding» (завершён)
+
+### Что сообщил пользователь
+Проект должен работать как Portable-приложение: перенос между папками, дисками и ОС
+(Windows/macOS/Linux) без потери данных и запуск в один клик; плюс зафиксировать версию среды,
+чтобы будущие обновления не ломали проект. Бинарники в репозиторий не кладём.
+
+### Слайсы эпика (три коммита)
+1. `0b3ee8b feat: auto-download pinned Node.js installer on Windows` — `start.bat`: при отсутствии
+   `node -v` сам качает официальный инсталлятор **v22.14.0** (`Invoke-WebRequest` → `node-installer.msi`
+   в корень), запускает `start /wait`, удаляет файл, затем `pause` + `exit /b 1` (сессия cmd не видит
+   новый `PATH` до перезапуска). URL проверен живьём (`SHASUMS256.txt` → HTTP 200).
+2. `06ffdda feat: portable cross-platform startup (start.sh, .gitattributes, browser fallback, README)` —
+   - **Аудит путей**: `db.ts`/`uploads.ts`/`backup.mjs`/`app.ts` строят пути от `import.meta.url` →
+     `projectRoot`; абсолютных `E:\…`/`C:\…` в коде нет. Данные (`data/`, `logs/`) всегда рядом с проектом.
+   - **`start.sh`** (новый, POSIX-аналог `start.bat`): проверка Node **>= 22.5** (через `node -e`),
+     `.env` из `.env.example`, `npm install`, открытие браузера (`open`/`xdg-open`), foreground `exec npm run dev`.
+     Синтаксис — `bash -n` ✓; `git ls-files --stage` → `100755`.
+   - **`.gitattributes`** (новый): `*.sh text eol=lf`, `*.bat text eol=crlf` — при `core.autocrlf=true`
+     иначе CRLF сломал бы shebang `start.sh` на Unix.
+   - **`pokerdon.ts`**: fallback браузера стал кроссплатформенным — `defaultPlaywrightRoot()`
+     (win32 `AppData/Local`, darwin `Library/Caches`, linux `~/.cache`, уважает `PLAYWRIGHT_BROWSERS_PATH`),
+     перебор всех layout'ов кэша (win64/linux/mac + headless), POSIX системные браузеры.
+   - **`README.md`**: раздел «Требования» (Node >= 22.5, `node:sqlite`), два способа старта
+     (`start.bat` / `./start.sh`), обновлена таблица команд.
+3. Данный docs-коммит — фиксация завершения эпика.
+
+### Проверено
+- `npm run lint` ✓, `npm run build` ✓ (warning о chunk >500 kB — предсуществующий),
+  `npm test` — сервер **479 (30 файлов)** ✓ (+3 к 476), клиент **116 (18 файлов)** ✓.
+- `bash -n start.sh` ✓; batch-логика (обе ветки автозагрузки) — cold-прогон temp-`.bat` ✓.
+- Git: `start.sh` в индексе `100755`, `eol=lf`, без `\r` в blob; `.gitattributes` в коммите.
+
+### Невыполненное / осознанно отложено
+- `server/package.json` → `"start": "NODE_ENV=production node dist/index.js"` — POSIX-присваивание env,
+  в Windows `cmd.exe` падает. Windows-поток (`start.bat` → dev) не задет. Фикс требует `cross-env`
+  (новая зависимость — только по согласованию) либо переноса установки env в код.
+
+### Следующая задача
+- UAT глазами: `./start.sh` на macOS/Linux (Node-проверка, `.env`, `npm install`, старт); перенос папки
+  на другой диск → БД `data/poker-crm.sqlite` поднимается рядом, данные на месте.
+- По желанию: закрыть env-флаг `npm run start` под Windows.
+
