@@ -1,6 +1,7 @@
 import type {
   ActivityCalendar,
   AppSettings,
+  AppVersionInfo,
   BalanceEntry,
   CurrentBalances,
   DayReconcile,
@@ -20,7 +21,8 @@ import type {
   TournamentRow,
   TournamentSummary,
   Transaction,
-  TransactionType
+  TransactionType,
+  UpdateCheckResult
 } from './types'
 
 const REQUEST_TIMEOUT_MS = 15_000
@@ -209,6 +211,10 @@ export const api = {
     get: () => request<{ settings: AppSettings }>('/settings').then((r) => r.settings),
     update: (dayStartHour: number) =>
       request<{ settings: AppSettings }>('/settings', { method: 'PUT', body: JSON.stringify({ dayStartHour }) }).then((r) => r.settings)
+  },
+  system: {
+    version: () => request<AppVersionInfo>('/system/version'),
+    checkUpdates: () => request<UpdateCheckResult>('/system/check-updates')
   },
   rates: {
     status: () => request<{ usdRub: { date: string; rate: number } | null; eurUsd: { date: string; rate: number } | null; stale: boolean }>('/rates/status')

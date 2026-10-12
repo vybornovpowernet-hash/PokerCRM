@@ -16,6 +16,7 @@ import { statisticsRoutes } from './routes/statistics.js'
 import { goalsRoutes } from './routes/goals.js'
 import { habitsRoutes } from './routes/habits.js'
 import { settingsRoutes } from './routes/settings.js'
+import { systemRoutes } from './routes/system.js'
 import { UPLOADS_ROOT, ensureUploadDirs } from './services/uploads.js'
 
 export interface CreateAppOptions {
@@ -62,6 +63,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
   await app.register(goalsRoutes)
   await app.register(habitsRoutes)
   await app.register(settingsRoutes)
+  await app.register(systemRoutes)
 
   app.get('/api/health', async () => ({ ok: true, uptime: process.uptime() }))
 

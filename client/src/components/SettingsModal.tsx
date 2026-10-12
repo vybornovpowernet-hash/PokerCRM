@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import type { AppVersionInfo, UpdateCheckResult } from '../lib/types'
 
 const HOURS = Array.from({ length: 13 }, (_, h) => h)
 
@@ -20,12 +21,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [version, setVersion] = useState<AppVersionInfo | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [update, setUpdate] = useState<UpdateCheckResult | null>(null)
+  const [checkError, setCheckError] = useState<string | null>(null)
 
   useEffect(() => {
     api.settings
       .get()
       .then((s) => setDayStartHour(s.dayStartHour))
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+    api.system
+      .version()
+      .then(setVersion)
+      .catch(() => setVersion(null))
   }, [])
 
   useEffect(() => {
@@ -49,6 +58,16 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setSaving(false))
+  }
+
+  const checkUpdates = () => {
+    setChecking(true)
+    setCheckError(null)
+    api.system
+      .checkUpdates()
+      .then(setUpdate)
+      .catch((e) => setCheckError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setChecking(false))
   }
 
   return (
@@ -96,6 +115,53 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         <p className="mt-4 text-xs text-slate-500">
           Пример: при 06:00 турнир, начавшийся в 04:00 18 сентября, будет записан как сессия 17 сентября.
         </p>
+
+        <div className="mt-5 border-t border-slate-700 pt-4">
+          <span className="block text-sm text-slate-300">Версия приложения</span>
+          <div className="mt-1 flex items-center justify-between gap-3">
+            <span className="text-sm text-slate-400">
+              {version ? (
+                <>
+                  Текущая версия: <span className="font-medium text-slate-200">v{version.version}</span>
+                </>
+              ) : (
+                '…'
+              )}
+            </span>
+            <button
+              onClick={checkUpdates}
+              disabled={checking}
+              className="shrink-0 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 transition hover:border-slate-500 disabled:opacity-50"
+            >
+              {checking ? 'Проверка…' : 'Проверить обновление'}
+            </button>
+          </div>
+
+          {checkError ? (
+            <p className="mt-2 text-xs text-red-400">{checkError}</p>
+          ) : update?.hasUpdate ? (
+            <div className="mt-3 rounded-lg border border-emerald-800/70 bg-emerald-950/40 p-3">
+              <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300">
+                Доступна версия v{update.latestVersion}
+              </span>
+              {update.releaseNotes && (
+                <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-slate-400">{update.releaseNotes}</p>
+              )}
+              {update.releaseUrl && (
+                <a
+                  href={update.releaseUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 inline-block text-xs font-medium text-emerald-300 transition hover:text-emerald-200"
+                >
+                  Открыть на GitHub →
+                </a>
+              )}
+            </div>
+          ) : update ? (
+            <p className="mt-2 text-xs text-emerald-400">Установлена актуальная версия</p>
+          ) : null}
+        </div>
       </div>
     </div>
   )

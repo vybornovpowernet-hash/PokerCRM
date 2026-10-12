@@ -46,6 +46,19 @@ export interface AppSettings {
   dayStartHour: number
 }
 
+export interface AppVersionInfo {
+  version: string
+  repository: string
+}
+
+export interface UpdateCheckResult {
+  hasUpdate: boolean
+  currentVersion: string
+  latestVersion: string | null
+  releaseUrl: string | null
+  releaseNotes: string | null
+}
+
 export type TransactionType = 'deposit' | 'withdraw' | 'transfer' | 'casino'
 export type Direction = 'in' | 'out'
 
