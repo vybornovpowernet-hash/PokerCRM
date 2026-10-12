@@ -2858,3 +2858,41 @@ test-driven-development (модель статусов + reconcile-ветки), 
   на другой диск → БД `data/poker-crm.sqlite` поднимается рядом, данные на месте.
 - По желанию: закрыть env-флаг `npm run start` под Windows.
 
+## 2026-10-12 — Слайс «GitHub Update Checker & Settings Integration» (v1.0.0)
+
+### Что сообщил пользователь
+Зафиксировать версию приложения и дать возможность проверять обновления через GitHub API прямо из
+UI — без ручного похода на GitHub. Релизов в репозитории пока нет — эндпоинт должен корректно
+переживать `404` (нет релизов = «актуально»).
+
+### Сервер
+- `package.json` (корневой): `version` 0.1.0 → **1.0.0** — единый источник версии (workspaces приватные).
+- `services/system.ts` (новый): `REPOSITORY`, `getAppVersion()` (читает корневой `package.json`,
+  путь от `import.meta.url` — работает в `src/` и `dist/`), `compareVersions` (численное покомпонентное
+  сравнение, снимает `v` и суффиксы), `checkForUpdates()` — fetch к
+  `https://api.github.com/repos/vybornovpowernet-hash/PokerCRM/releases/latest` с
+  `User-Agent: PokerCRM-UpdateChecker` + `Accept: application/vnd.github+json`, `AbortSignal.timeout(15s)`;
+  `404` → `hasUpdate:false` (no releases = up to date), сетевой сбой/`5xx` → `HttpError 502`.
+- `routes/system.ts` (новый) + регистрация в `app.ts`: `GET /api/system/version` → `{version, repository}`;
+  `GET /api/system/check-updates` → `{hasUpdate, currentVersion, latestVersion, releaseUrl, releaseNotes}`.
+- URL проверен живьём (`nodejs.org`), GitHub fetch покрыт тестами через мок `vi.stubGlobal('fetch', …)`
+  (update/equal/404/502/User-Agent + HTTP-инъекции). Сервер **490 (31 файл)** (+11).
+
+### Клиент
+- `lib/types.ts`: `AppVersionInfo` + `UpdateCheckResult`; `lib/api.ts`: namespace `api.system`
+  (`version`/`checkUpdates`, штатный таймаут 15с).
+- `components/SettingsModal.tsx`: секция «Версия приложения» — текущая версия при открытии, кнопка
+  «Проверить обновление»; при `hasUpdate` — бейдж «Доступна версия vX» + releaseNotes + «Открыть на
+  GitHub →» (`rel="noreferrer"`); иначе «Установлена актуальная версия»; ошибка — красный текст.
+  Полная проверка — только по клику (никаких авто-запросов к GitHub).
+- `tests/settings-modal.test.tsx`: +3 теста (показ версии, бейдж+ссылка, «актуальная»). Клиент **119 (18)** (+3).
+
+### Проверено
+`npm run lint` ✓, `npm run build` ✓ (warning о chunk — предсуществующий), `npm test` ✓
+(сервер 490/31, клиент 119/18). AGENTS.md актуализирован (routes/tests/components/lib).
+
+### Следующая задача
+- Опубликовать GitHub Release `v1.0.0` — тогда кнопка начнёт показывать бейдж на следующих версиях
+  (сейчас честно «актуально»: правильный 404-ответ ещё не означает ошибку).
+- UAT в браузере: открыть шестерёнку → «Проверить обновление».
+
