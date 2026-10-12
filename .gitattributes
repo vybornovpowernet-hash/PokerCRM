@@ -1,0 +1,5 @@
+# Shell scripts must keep LF so the shebang keeps working on macOS/Linux,
+# regardless of a Windows checkout's core.autocrlf setting.
+*.sh text eol=lf
+# Windows batch files are expected with CRLF.
+*.bat text eol=crlf

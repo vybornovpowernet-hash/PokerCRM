@@ -34,8 +34,43 @@ const WIN_SYSTEM_APPS = [
   ['Microsoft', 'Edge', 'Application', 'msedge.exe']
 ] as const
 
+// Playwright ships one binary layout per OS; the fallback probes every known
+// layout inside a cached `chromium-*` folder so a folder moved between platforms
+// (or a machine where only a system browser exists) still resolves.
+const CHROMIUM_LAYOUTS = [
+  { sub: 'chrome-win64', exe: 'chrome.exe' },
+  { sub: 'chrome-linux', exe: 'chrome' },
+  { sub: 'chrome-mac', exe: path.join('Chromium.app', 'Contents', 'MacOS', 'Chromium') },
+  { sub: 'chrome-headless-shell-win64', exe: 'chrome-headless-shell.exe' },
+  { sub: 'chrome-headless-shell-linux64', exe: 'chrome-headless-shell' },
+  { sub: 'chrome-headless-shell-mac-arm64', exe: 'chrome-headless-shell' },
+  { sub: 'chrome-headless-shell-mac-x64', exe: 'chrome-headless-shell' }
+] as const
+
+// System browsers on Unix-like systems live at fixed absolute locations (unlike
+// Windows, where they sit under Program Files roots resolved at runtime).
+const POSIX_SYSTEM_APPS = [
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+  '/snap/bin/chromium',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'
+] as const
+
+/** Playwright's browser cache directory for the running OS (or `PLAYWRIGHT_BROWSERS_PATH`). */
+export function defaultPlaywrightRoot(platform: NodeJS.Platform = os.platform(), home: string = os.homedir()): string {
+  const override = process.env.PLAYWRIGHT_BROWSERS_PATH
+  if (override && override !== '0') return override
+  if (platform === 'win32') return path.join(home, 'AppData', 'Local', 'ms-playwright')
+  if (platform === 'darwin') return path.join(home, 'Library', 'Caches', 'ms-playwright')
+  return path.join(home, '.cache', 'ms-playwright')
+}
+
 export function resolveBrowserCandidates(
-  playwrightRoot = path.join(os.homedir(), 'AppData', 'Local', 'ms-playwright'),
+  playwrightRoot = defaultPlaywrightRoot(),
   systemRoots: readonly string[] = winSystemRoots()
 ): string[] {
   const candidates: string[] = []
@@ -47,15 +82,20 @@ export function resolveBrowserCandidates(
     }
   })()
   for (const dir of dirs) {
-    if (!/^chromium/.test(dir)) continue
-    const headless = dir.startsWith('chromium_headless_shell')
-    const sub = headless ? 'chrome-headless-shell-win64' : 'chrome-win64'
-    const exe = path.join(playwrightRoot, dir, sub, headless ? 'chrome-headless-shell.exe' : 'chrome.exe')
-    if (existsSync(exe)) candidates.push(exe)
+    if (!dir.startsWith('chromium')) continue
+    for (const layout of CHROMIUM_LAYOUTS) {
+      const exe = path.join(playwrightRoot, dir, layout.sub, layout.exe)
+      if (existsSync(exe)) candidates.push(exe)
+    }
   }
   for (const root of systemRoots) {
     for (const parts of WIN_SYSTEM_APPS) {
       const exe = path.join(root, ...parts)
+      if (existsSync(exe)) candidates.push(exe)
+    }
+  }
+  if (os.platform() !== 'win32') {
+    for (const exe of POSIX_SYSTEM_APPS) {
       if (existsSync(exe)) candidates.push(exe)
     }
   }

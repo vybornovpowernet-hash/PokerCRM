@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Page } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
-import { resolveBrowserCandidates, resolvePokerDomUrls, scrapeFromMirrors } from '../src/services/rates/pokerdon.js'
+import { defaultPlaywrightRoot, resolveBrowserCandidates, resolvePokerDomUrls, scrapeFromMirrors } from '../src/services/rates/pokerdon.js'
 
 function tempDir(): string {
   return mkdtempSync(path.join(os.tmpdir(), 'pokerdon-test-'))
@@ -53,6 +53,41 @@ describe('resolveBrowserCandidates', () => {
       path.join(sysRoot, 'Google', 'Chrome', 'Application', 'chrome.exe'),
       path.join(sysRoot, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
     ])
+  })
+
+  it('finds cached Linux and macOS chromium layouts (cross-platform folder move)', () => {
+    const linuxRoot = tempDir()
+    const macRoot = tempDir()
+    temps.push(linuxRoot, macRoot)
+    touch(linuxRoot, 'chromium-1243/chrome-linux/chrome')
+    touch(macRoot, 'chromium-1243/chrome-mac/Chromium.app/Contents/MacOS/Chromium')
+    expect(resolveBrowserCandidates(linuxRoot, [])).toEqual([path.join(linuxRoot, 'chromium-1243', 'chrome-linux', 'chrome')])
+    expect(resolveBrowserCandidates(macRoot, [])).toEqual([
+      path.join(macRoot, 'chromium-1243', 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium')
+    ])
+  })
+})
+
+describe('defaultPlaywrightRoot', () => {
+  it('uses the platform-specific Playwright cache directory', () => {
+    expect(defaultPlaywrightRoot('win32', path.join('C:', 'Users', 'me'))).toBe(
+      path.join('C:', 'Users', 'me', 'AppData', 'Local', 'ms-playwright')
+    )
+    expect(defaultPlaywrightRoot('darwin', '/Users/me')).toBe(path.join('/Users/me', 'Library', 'Caches', 'ms-playwright'))
+    expect(defaultPlaywrightRoot('linux', '/home/me')).toBe(path.join('/home/me', '.cache', 'ms-playwright'))
+  })
+
+  it('honours PLAYWRIGHT_BROWSERS_PATH and ignores the "0" sentinel', () => {
+    const prev = process.env.PLAYWRIGHT_BROWSERS_PATH
+    try {
+      process.env.PLAYWRIGHT_BROWSERS_PATH = '/custom/playwright'
+      expect(defaultPlaywrightRoot('linux', '/home/me')).toBe('/custom/playwright')
+      process.env.PLAYWRIGHT_BROWSERS_PATH = '0'
+      expect(defaultPlaywrightRoot('linux', '/home/me')).toBe(path.join('/home/me', '.cache', 'ms-playwright'))
+    } finally {
+      if (prev === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH
+      else process.env.PLAYWRIGHT_BROWSERS_PATH = prev
+    }
   })
 })
 
