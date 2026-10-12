@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '../lib/api'
 import { formatAmount } from '../lib/money'
 import type { MbrSummary, Room, TournamentGroup, TournamentSummary } from '../lib/types'
@@ -20,6 +21,8 @@ const inactiveBtn = `${buttonCls} border-slate-700 text-slate-400 hover:border-s
 const inputCls =
   'rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-sm text-slate-100 shadow-inner outline-none transition focus:border-slate-500'
 const thCls = 'px-3 py-2 text-left text-[11px] uppercase tracking-wider text-slate-500 whitespace-nowrap'
+const TOURNEY_COLS = 'minmax(11rem, 1fr) 5rem 6.5rem 7.5rem 5rem 4.5rem 4.5rem 2.25rem'
+const DETAIL_COLS = 'minmax(6rem, 1fr) minmax(6rem, 1fr) 5rem 7rem'
 
 function dayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -82,16 +85,16 @@ function SortHeader({
   right?: boolean
 }) {
   return (
-    <th className={`${thCls} ${right ? 'text-right' : ''}`}>
+    <div className={`${thCls} ${right ? 'text-right' : ''}`}>
       <button
         onClick={() => onSort(sortKey)}
-        className={`flex items-center gap-1 uppercase transition hover:text-slate-200 ${right ? 'justify-end' : ''}`}
+        className={`flex w-full items-center gap-1 uppercase transition hover:text-slate-200 ${right ? 'justify-end' : ''}`}
         title={`Сортировать по «${label}»`}
       >
         {label}
         <span className="text-[10px] text-slate-600">{active ? (dir === 'desc' ? '▼' : dir === 'asc' ? '▲' : '') : ''}</span>
       </button>
-    </th>
+    </div>
   )
 }
 
@@ -298,30 +301,12 @@ export default function TournamentsPage() {
             ))}
           </div>
 
-          <div className="overflow-x-auto rounded-xl border border-slate-700 bg-slate-800/80 shadow-lg shadow-black/40">
+          <div className="overflow-hidden rounded-xl border border-slate-700 bg-slate-800/80 shadow-lg shadow-black/40">
             {summary?.blank && <div className="border-b border-amber-900/60 bg-amber-950/40 px-4 py-2 text-xs text-amber-300">{summary.blank}</div>}
             {groups.length === 0 ? (
               <div className="p-10 text-center text-sm text-slate-500">Нет турниров за период</div>
             ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-700">
-                    <SortHeader label="Название" sortKey="label" active={sortKey === 'label'} dir={sortDir} onSort={onSort} />
-                    <SortHeader label="Сыграно" sortKey="count" active={sortKey === 'count'} dir={sortDir} onSort={onSort} />
-                    <SortHeader label="Бай-ин" sortKey="buyin" active={sortKey === 'buyin'} dir={sortDir} onSort={onSort} right />
-                    <SortHeader label="Профит" sortKey="totalProfitUsd" active={sortKey === 'totalProfitUsd'} dir={sortDir} onSort={onSort} />
-                    <SortHeader label="ROI" sortKey="roiPercent" active={sortKey === 'roiPercent'} dir={sortDir} onSort={onSort} />
-                    <SortHeader label="Место" sortKey="bestRank" active={sortKey === 'bestRank'} dir={sortDir} onSort={onSort} right />
-                    <SortHeader label="AFS" sortKey="avgEntrants" active={sortKey === 'avgEntrants'} dir={sortDir} onSort={onSort} right />
-                    <th className="px-3 py-2" aria-hidden />
-                  </tr>
-                </thead>
-                <tbody>
-                  {groups.map((g) => (
-                    <GroupRows key={g.key} group={g} expanded={expanded.has(g.key)} onToggle={() => toggle(g.key)} />
-                  ))}
-                </tbody>
-              </table>
+              <VirtualizedGroups groups={groups} expanded={expanded} onToggle={toggle} sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
             )}
           </div>
 
@@ -380,61 +365,147 @@ export default function TournamentsPage() {
   )
 }
 
+function VirtualizedGroups({
+  groups,
+  expanded,
+  onToggle,
+  sortKey,
+  sortDir,
+  onSort
+}: {
+  groups: TournamentGroup[]
+  expanded: Set<string>
+  onToggle: (key: string) => void
+  sortKey: SortKey
+  sortDir: SortDir
+  onSort: (key: SortKey) => void
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: groups.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 46,
+    getItemKey: (index) => groups[index]?.key ?? index,
+    overscan: 8
+  })
+
+  return (
+    <div ref={scrollRef} className="h-[60vh] min-h-[18rem] overflow-auto">
+      <div className="min-w-[46rem] text-sm">
+        <div className="sticky top-0 z-10 grid border-b border-slate-700 bg-slate-800" style={{ gridTemplateColumns: TOURNEY_COLS }}>
+          <SortHeader label="Название" sortKey="label" active={sortKey === 'label'} dir={sortDir} onSort={onSort} />
+          <SortHeader label="Сыграно" sortKey="count" active={sortKey === 'count'} dir={sortDir} onSort={onSort} />
+          <SortHeader label="Бай-ин" sortKey="buyin" active={sortKey === 'buyin'} dir={sortDir} onSort={onSort} right />
+          <SortHeader label="Профит" sortKey="totalProfitUsd" active={sortKey === 'totalProfitUsd'} dir={sortDir} onSort={onSort} />
+          <SortHeader label="ROI" sortKey="roiPercent" active={sortKey === 'roiPercent'} dir={sortDir} onSort={onSort} />
+          <SortHeader label="Место" sortKey="bestRank" active={sortKey === 'bestRank'} dir={sortDir} onSort={onSort} right />
+          <SortHeader label="AFS" sortKey="avgEntrants" active={sortKey === 'avgEntrants'} dir={sortDir} onSort={onSort} right />
+          <div className="px-3 py-2" aria-hidden />
+        </div>
+        <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
+          {virtualizer.getVirtualItems().map((item) => {
+            const group = groups[item.index]
+            if (!group) return null
+            return (
+              <div
+                key={item.key}
+                ref={virtualizer.measureElement}
+                data-index={item.index}
+                className="absolute left-0 top-0 w-full"
+                style={{ transform: `translateY(${item.start}px)` }}
+              >
+                <GroupRows group={group} expanded={expanded.has(group.key)} onToggle={() => onToggle(group.key)} />
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function GroupRows({ group, expanded, onToggle }: { group: TournamentGroup; expanded: boolean; onToggle: () => void }) {
   const labelled = group.bestRank !== null || group.avgEntrants !== null
   return (
     <>
-      <tr onClick={onToggle} className="cursor-pointer border-b border-slate-800/60 transition hover:bg-slate-800/40">
-        <td className="px-3 py-2.5">
-          <span className="flex items-center gap-2 text-slate-100">
+      <div
+        onClick={onToggle}
+        className="grid cursor-pointer border-b border-slate-800/60 transition hover:bg-slate-800/40"
+        style={{ gridTemplateColumns: TOURNEY_COLS }}
+      >
+        <div className="min-w-0 px-3 py-2.5">
+          <span className="flex min-w-0 items-center gap-2 text-slate-100">
             <span className={`inline-block w-3 text-xs text-slate-500 transition ${expanded ? 'rotate-90' : ''}`}>▶</span>
             <span className="truncate">{group.label}</span>
           </span>
-        </td>
-        <td className="px-3 py-2.5 tabular-nums text-slate-300">{group.count}</td>
-        <td className="px-3 py-2.5 text-right tabular-nums text-slate-300">{group.count > 0 ? cellValue(Math.round(group.totalBuyinUsd / group.count), 'usd') : '—'}</td>
-        <td className={`px-3 py-2.5 text-right tabular-nums ${profitCls(group.totalProfitUsd)}`}>{cellValue(group.totalProfitUsd, 'usd')}</td>
-        <td className={`px-3 py-2.5 text-right tabular-nums ${profitCls(group.roiPercent)}`}>
+        </div>
+        <div className="px-3 py-2.5 tabular-nums text-slate-300">{group.count}</div>
+        <div className="px-3 py-2.5 text-right tabular-nums text-slate-300">{group.count > 0 ? cellValue(Math.round(group.totalBuyinUsd / group.count), 'usd') : '—'}</div>
+        <div className={`px-3 py-2.5 text-right tabular-nums ${profitCls(group.totalProfitUsd)}`}>{cellValue(group.totalProfitUsd, 'usd')}</div>
+        <div className={`px-3 py-2.5 text-right tabular-nums ${profitCls(group.roiPercent)}`}>
           {group.roiPercent === null ? '—' : `${group.roiPercent}%`}
-        </td>
-        <td className="px-3 py-2.5 text-right tabular-nums text-slate-300">{group.bestRank ?? '—'}</td>
-        <td className="px-3 py-2.5 text-right tabular-nums text-slate-300">{group.avgEntrants ?? '—'}</td>
-        <td className="px-3 py-2.5 text-slate-500" aria-hidden>
+        </div>
+        <div className="px-3 py-2.5 text-right tabular-nums text-slate-300">{group.bestRank ?? '—'}</div>
+        <div className="px-3 py-2.5 text-right tabular-nums text-slate-300">{group.avgEntrants ?? '—'}</div>
+        <div className="px-3 py-2.5 text-slate-500" aria-hidden>
           {expanded ? '−' : '+'}
-        </td>
-      </tr>
+        </div>
+      </div>
       {expanded && (
-        <tr className="border-b border-slate-800/60 bg-slate-900/40">
-          <td colSpan={8} className="px-4 py-3">
-            <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/40">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-800 text-[11px] uppercase tracking-wider text-slate-500">
-                    <th className="px-3 py-1.5 text-left">Дата</th>
-                    <th className="px-3 py-1.5 text-left">Рум</th>
-                    <th className="px-3 py-1.5 text-right">Место</th>
-                    <th className="px-3 py-1.5 text-right">Профит</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {group.rows.map((r, i) => (
-                    <tr key={`${r.date}-${i}`} className="border-b border-slate-800/50 last:border-0">
-                      <td className="px-3 py-1.5 tabular-nums text-slate-400">{r.date}</td>
-                      <td className="px-3 py-1.5 text-slate-300">{r.roomName}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums text-slate-300">{r.place ?? '—'}</td>
-                      <td className={`px-3 py-1.5 text-right tabular-nums ${profitCls(r.profitUsd)}`}>{cellValue(r.profitUsd, 'usd')}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {!labelled && (
-              <p className="mt-2 text-xs text-slate-500">
-                Ручные строки (без названия): агрегируются по лимиту бай-ина.
-              </p>
-            )}
-          </td>
-        </tr>
+        <div className="border-b border-slate-800/60 bg-slate-900/40 px-4 py-3">
+          <GroupDetail group={group} labelled={labelled} />
+        </div>
+      )}
+    </>
+  )
+}
+
+function GroupDetail({ group, labelled }: { group: TournamentGroup; labelled: boolean }) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: group.rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 30,
+    overscan: 12
+  })
+
+  return (
+    <>
+      <div ref={scrollRef} className="max-h-72 overflow-auto rounded-lg border border-slate-800 bg-slate-950/40">
+        <div className="min-w-[34rem]">
+          <div className="grid border-b border-slate-800 bg-slate-950/60 text-[11px] uppercase tracking-wider text-slate-500" style={{ gridTemplateColumns: DETAIL_COLS }}>
+            <div className="px-3 py-1.5 text-left">Дата</div>
+            <div className="px-3 py-1.5 text-left">Рум</div>
+            <div className="px-3 py-1.5 text-right">Место</div>
+            <div className="px-3 py-1.5 text-right">Профит</div>
+          </div>
+          <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
+            {virtualizer.getVirtualItems().map((item) => {
+              const row = group.rows[item.index]
+              if (!row) return null
+              const last = item.index === group.rows.length - 1
+              return (
+                <div
+                  key={item.key}
+                  ref={virtualizer.measureElement}
+                  data-index={item.index}
+                  className={`absolute left-0 top-0 grid w-full ${last ? '' : 'border-b border-slate-800/50'}`}
+                  style={{ gridTemplateColumns: DETAIL_COLS, transform: `translateY(${item.start}px)` }}
+                >
+                  <div className="px-3 py-1.5 tabular-nums text-slate-400">{row.date}</div>
+                  <div className="px-3 py-1.5 text-slate-300">{row.roomName}</div>
+                  <div className="px-3 py-1.5 text-right tabular-nums text-slate-300">{row.place ?? '—'}</div>
+                  <div className={`px-3 py-1.5 text-right tabular-nums ${profitCls(row.profitUsd)}`}>{cellValue(row.profitUsd, 'usd')}</div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+      {!labelled && (
+        <p className="mt-2 text-xs text-slate-500">
+          Ручные строки (без названия): агрегируются по лимиту бай-ина.
+        </p>
       )}
     </>
   )

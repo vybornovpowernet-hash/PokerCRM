@@ -1191,3 +1191,11 @@ pm test — сервер **460 (30 файлов)** ✓ (+5), клиент **101 
 - [x] Решение пользователя: «Профит = чистый покер»; сверка работает на неизменном `profitUsd`
 - [x] Проверено: `npm run build` ✓, `npm run lint` ✓, `npm test` — сервер **476 (30 файлов)** ✓ (+2), клиент **113 (17 файлов)** ✓ (+1)
 - [ ] UAT: «Сессии» — колонка «Профит» = чистый покер, подпись «↳ Казино» при казино, KPI без кассы; сверка дня сходится
+
+### Слайс «Tournaments Virtualization (react-virtual)» (2026-10-12)
+- [x] `client/package.json`: `@tanstack/react-virtual@^3.14.17` (Вариант А, `npm install -w client`)
+- [x] `client/src/pages/Tournaments.tsx`: главный список и детали — CSS Grid + `useVirtualizer` (контейнер `h-[60vh] min-h-[18rem] overflow-auto`, `sticky`-шапка, spacer + `translateY`, `measureElement`/`getItemKey`, `overscan` 8/12); компоненты `VirtualizedGroups`/`GroupRows`/`GroupDetail`; `TOURNEY_COLS`/`DETAIL_COLS`; `SortHeader` `<th>` → `<div>`; гварды под `noUncheckedIndexedAccess`
+- [x] `client/tests/tournaments-virtual.test.tsx` (новый): мок `useVirtualizer` passthrough + мок api, 3 теста (рендер, сортировка, раскрытие деталей)
+- [x] Проверено: `npm run build -w client` ✓, `npm run lint` ✓, `npm test` — сервер **476 (30 файлов)** ✓, клиент **116 (18 файлов)** ✓ (+3 теста, +1 файл)
+- [x] Закоммичено `feat: виртуализация списка турниров (react-virtual)` + push `origin main`
+- [ ] UAT: прокрутка «Турниров» на полном датасете — плавность, `sticky`-шапка, раскрытие деталей, фильтры/сортировка

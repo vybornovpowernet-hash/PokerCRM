@@ -11,6 +11,7 @@
     "lint": "eslint src"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.14.17",
     "@tiptap/core": "^3.31.4",
     "@tiptap/extension-bold": "^3.31.4",
     "@tiptap/extension-document": "^3.31.4",
