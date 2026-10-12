@@ -20,8 +20,6 @@ const projectRoot = join(moduleRoot, '..', '..')
 export const REPOSITORY = 'vybornovpowernet-hash/PokerCRM'
 
 const GITHUB_LATEST_RELEASE = `https://api.github.com/repos/${REPOSITORY}/releases/latest`
-const GITHUB_ARCHIVE = `https://github.com/${REPOSITORY}/archive/refs/heads/main.zip`
-const ARCHIVE_ROOT = `${REPOSITORY.split('/')[1] ?? 'PokerCRM'}-main`
 const USER_AGENT = 'PokerCRM-UpdateChecker'
 const TIMEOUT_MS = 15_000
 const DOWNLOAD_TIMEOUT_MS = 60_000
@@ -71,11 +69,20 @@ export function compareVersions(a: string, b: string): number {
   return 0
 }
 
-/** Queries the latest GitHub release and compares its tag with the local version.
- * A 404 (no published releases yet) is reported as up to date rather than an error. */
-export async function checkForUpdates(): Promise<UpdateCheckResult> {
-  const currentVersion = getAppVersion()
+interface LatestRelease {
+  tagName: string
+  htmlUrl: string | null
+  body: string | null
+  zipballUrl: string | null
+}
 
+/**
+ * Fetches the latest GitHub release. Returns null on a 404 (no published
+ * releases yet — reported as "up to date" by the caller). A missing
+ * `zipball_url` is preserved as null so the updater can refuse to guess a
+ * download source.
+ */
+async function fetchLatestRelease(): Promise<LatestRelease | null> {
   let res: Response
   try {
     res = await fetch(GITHUB_LATEST_RELEASE, {
@@ -86,24 +93,39 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
     throw new HttpError(502, `Не удалось связаться с GitHub API: ${err instanceof Error ? err.message : String(err)}`)
   }
 
-  if (res.status === 404) {
-    return { hasUpdate: false, currentVersion, latestVersion: null, releaseUrl: null, releaseNotes: null }
-  }
+  if (res.status === 404) return null
   if (!res.ok) {
     throw new HttpError(502, `GitHub API вернул статус ${res.status}`)
   }
 
-  const body = (await res.json()) as { tag_name?: unknown; html_url?: unknown; body?: unknown }
+  const body = (await res.json()) as { tag_name?: unknown; html_url?: unknown; body?: unknown; zipball_url?: unknown }
   if (typeof body.tag_name !== 'string' || body.tag_name.trim() === '') {
     throw new HttpError(502, 'GitHub API: ответ без tag_name')
   }
-  const latestVersion = body.tag_name.trim().replace(/^v/i, '')
+  return {
+    tagName: body.tag_name.trim(),
+    htmlUrl: typeof body.html_url === 'string' ? body.html_url : null,
+    body: typeof body.body === 'string' && body.body.trim() !== '' ? body.body : null,
+    zipballUrl: typeof body.zipball_url === 'string' && body.zipball_url.trim() !== '' ? body.zipball_url : null
+  }
+}
+
+/** Queries the latest GitHub release and compares its tag with the local version.
+ * A 404 (no published releases yet) is reported as up to date rather than an error. */
+export async function checkForUpdates(): Promise<UpdateCheckResult> {
+  const currentVersion = getAppVersion()
+  const release = await fetchLatestRelease()
+  if (!release) {
+    return { hasUpdate: false, currentVersion, latestVersion: null, releaseUrl: null, releaseNotes: null }
+  }
+
+  const latestVersion = release.tagName.replace(/^v/i, '')
   return {
     hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
     currentVersion,
     latestVersion,
-    releaseUrl: typeof body.html_url === 'string' ? body.html_url : null,
-    releaseNotes: typeof body.body === 'string' && body.body.trim() !== '' ? body.body : null
+    releaseUrl: release.htmlUrl,
+    releaseNotes: release.body
   }
 }
 
@@ -126,10 +148,32 @@ export interface StageUpdateResult {
 }
 
 /**
- * Downloads the current `main` branch archive and unpacks the app files into
- * `<root>/.update-tmp/extracted`, ready for a surgical overwrite by the updater
- * script. Only entries under the GitHub `<repo>-main/` prefix are taken; nothing
- * outside the staging directory is ever touched.
+ * GitHub wraps every archive in a single top-level directory — `main.zip`
+ * uses `<repo>-main/`, while a release zipball uses `<owner>-<repo>-<hash>/`.
+ * The name is not stable, so it is detected from the entries themselves: strip
+ * the wrapper only when every file lives under the same first path segment.
+ * Files at the archive root (or several roots) yield an empty prefix.
+ */
+export function detectArchivePrefix(entries: { entryName: string }[]): string {
+  let prefix: string | null = null
+  for (const entry of entries) {
+    const name = entry.entryName.replace(/\\/g, '/')
+    const slash = name.indexOf('/')
+    if (slash <= 0) return ''
+    const top = name.slice(0, slash)
+    if (prefix === null) prefix = top
+    else if (prefix !== top) return ''
+  }
+  return prefix === null ? '' : `${prefix}/`
+}
+
+/**
+ * Downloads the archive of the latest GitHub Release and unpacks the app files
+ * into `<root>/.update-tmp/extracted`, ready for a surgical overwrite by the
+ * updater script. The download source is the release's `zipball_url` — the code
+ * that arrives therefore always matches the version advertised by the Releases
+ * API (never the moving `main` branch). Nothing outside the staging directory
+ * is ever touched.
  */
 export async function downloadAndStageUpdate(rootDir: string = projectRoot): Promise<StageUpdateResult> {
   const tmpDir = join(rootDir, UPDATE_TMP_DIR)
@@ -137,10 +181,18 @@ export async function downloadAndStageUpdate(rootDir: string = projectRoot): Pro
   rmSync(tmpDir, { recursive: true, force: true })
   mkdirSync(extractDir, { recursive: true })
 
+  const release = await fetchLatestRelease()
+  if (!release) {
+    throw new HttpError(502, 'Релизы не найдены — обновление недоступно')
+  }
+  if (!release.zipballUrl) {
+    throw new HttpError(502, 'В последнем релизе нет ссылки на архив (zipball_url)')
+  }
+
   let res: Response
   try {
-    res = await fetch(GITHUB_ARCHIVE, {
-      headers: { 'User-Agent': USER_AGENT },
+    res = await fetch(release.zipballUrl, {
+      headers: { 'User-Agent': USER_AGENT, Accept: 'application/vnd.github+json' },
       signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
     })
   } catch (err) {
@@ -157,12 +209,13 @@ export async function downloadAndStageUpdate(rootDir: string = projectRoot): Pro
     throw new HttpError(502, 'Архив обновления повреждён')
   }
 
+  const entries = zip.getEntries().filter((entry) => !entry.isDirectory)
+  const prefix = detectArchivePrefix(entries)
   let files = 0
-  for (const entry of zip.getEntries()) {
-    if (entry.isDirectory) continue
+  for (const entry of entries) {
     const name = entry.entryName.replace(/\\/g, '/')
-    if (!name.startsWith(`${ARCHIVE_ROOT}/`)) continue
-    const target = resolveArchiveEntry(extractDir, name.slice(ARCHIVE_ROOT.length + 1))
+    const relative = name.startsWith(prefix) ? name.slice(prefix.length) : name
+    const target = resolveArchiveEntry(extractDir, relative)
     if (!target) continue
     mkdirSync(dirname(target), { recursive: true })
     writeFileSync(target, entry.getData())

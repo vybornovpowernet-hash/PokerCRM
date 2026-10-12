@@ -10,6 +10,7 @@ import {
   UPDATE_TMP_DIR,
   checkForUpdates,
   compareVersions,
+  detectArchivePrefix,
   downloadAndStageUpdate,
   getAppVersion,
   resolveArchiveEntry,
@@ -25,10 +26,31 @@ function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
-function zipResponse(entries: Record<string, string>): Response {
+function zipBody(entries: Record<string, string>): Buffer {
   const zip = new AdmZip()
   for (const [name, content] of Object.entries(entries)) zip.addFile(name, Buffer.from(content))
-  return new Response(zip.toBuffer(), { status: 200 })
+  return zip.toBuffer()
+}
+
+/**
+ * Stubs `fetch` for a full release flow: the Releases API call answers with a
+ * payload carrying `zipball_url`, and the archive call answers with a zip built
+ * from `entries`. Returns the recorded request URLs so tests can assert which
+ * source was downloaded.
+ */
+function stubRelease(entries: Record<string, string>, tag = 'v1.1.0'): { calls: string[] } {
+  const calls: string[] = []
+  const zipballUrl = `https://api.github.com/repos/${REPOSITORY}/zipball/${tag}`
+  const apiResponse = jsonResponse({ tag_name: tag, zipball_url: zipballUrl, html_url: 'https://github.com/x', body: 'notes' })
+  const zipResponse = new Response(zipBody(entries), { status: 200 })
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockImplementation((url: string) => {
+      calls.push(url)
+      return Promise.resolve(url.includes('/releases/latest') ? apiResponse : zipResponse)
+    })
+  )
+  return { calls }
 }
 
 describe('compareVersions', () => {
@@ -44,6 +66,10 @@ describe('compareVersions', () => {
 describe('getAppVersion', () => {
   it('reads a semver from the workspace-root package.json', () => {
     expect(getAppVersion()).toMatch(/^\d+\.\d+\.\d+/)
+  })
+
+  it('reports the current release version 1.1.0', () => {
+    expect(getAppVersion()).toBe('1.1.0')
   })
 })
 
@@ -158,39 +184,76 @@ describe('resolveArchiveEntry', () => {
   })
 })
 
+describe('detectArchivePrefix', () => {
+  it('strips a single wrapper directory (release zipball shape)', () => {
+    expect(
+      detectArchivePrefix([{ entryName: 'vybornovpowernet-hash-PokerCRM-abc1234/package.json' }, { entryName: 'vybornovpowernet-hash-PokerCRM-abc1234/client/src/main.tsx' }])
+    ).toBe('vybornovpowernet-hash-PokerCRM-abc1234/')
+  })
+
+  it('returns an empty prefix when files sit at the archive root', () => {
+    expect(detectArchivePrefix([{ entryName: 'package.json' }])).toBe('')
+  })
+
+  it('returns an empty prefix when there are several top-level entries', () => {
+    expect(detectArchivePrefix([{ entryName: 'a/x.ts' }, { entryName: 'b/y.ts' }])).toBe('')
+  })
+})
+
 describe('downloadAndStageUpdate', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('extracts only the app prefix into .update-tmp/extracted', async () => {
+  it('downloads the release zipball_url and strips the owner-repo-hash root', async () => {
     const root = mkdtempSync(join(tmpdir(), 'poker-update-'))
     try {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue(
-          zipResponse({
-            'PokerCRM-main/package.json': '{"version":"9.9.9"}',
-            'PokerCRM-main/client/src/main.tsx': 'export {}',
-            'PokerCRM-main/.env.example': 'PORT=3001',
-            'other-folder/ignore.txt': 'nope'
-          })
-        )
-      )
+      const { calls } = stubRelease({
+        'vybornovpowernet-hash-PokerCRM-abc1234/package.json': '{"version":"1.1.0"}',
+        'vybornovpowernet-hash-PokerCRM-abc1234/client/src/main.tsx': 'export {}',
+        'vybornovpowernet-hash-PokerCRM-abc1234/.env.example': 'PORT=3001'
+      })
       const result = await downloadAndStageUpdate(root)
       expect(result.files).toBe(3)
-      expect(readFileSync(join(root, UPDATE_TMP_DIR, 'extracted', 'package.json'), 'utf8')).toContain('9.9.9')
+      expect(readFileSync(join(root, UPDATE_TMP_DIR, 'extracted', 'package.json'), 'utf8')).toContain('1.1.0')
       expect(existsSync(join(root, UPDATE_TMP_DIR, 'extracted', 'client', 'src', 'main.tsx'))).toBe(true)
-      expect(existsSync(join(root, UPDATE_TMP_DIR, 'extracted', 'other-folder'))).toBe(false)
+      expect(calls[0]).toContain('/releases/latest')
+      expect(calls[1]).toContain('/zipball/')
+      expect(calls.some((url) => url.includes('main.zip'))).toBe(false)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
   })
 
-  it('throws a 502 when GitHub returns a non-ok status', async () => {
+  it('throws a 502 when there is no release to install', async () => {
     const root = mkdtempSync(join(tmpdir(), 'poker-update-'))
     try {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 500 })))
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 404 })))
+      await expect(downloadAndStageUpdate(root)).rejects.toMatchObject({ status: 502 })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('throws a 502 when the release lacks a zipball_url', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'poker-update-'))
+    try {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ tag_name: 'v1.1.0', html_url: 'https://github.com/x' })))
+      await expect(downloadAndStageUpdate(root)).rejects.toMatchObject({ status: 502 })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('throws a 502 when the zipball download returns a non-ok status', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'poker-update-'))
+    try {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation((url: string) =>
+          Promise.resolve(url.includes('/releases/latest') ? jsonResponse({ tag_name: 'v1.1.0', zipball_url: 'https://api.github.com/zipball' }) : new Response('', { status: 500 }))
+        )
+      )
       await expect(downloadAndStageUpdate(root)).rejects.toMatchObject({ status: 502 })
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -210,7 +273,7 @@ describe('downloadAndStageUpdate', () => {
   it('throws a 502 when the archive carries no app files', async () => {
     const root = mkdtempSync(join(tmpdir(), 'poker-update-'))
     try {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(zipResponse({ 'other-folder/file.txt': 'x' })))
+      stubRelease({})
       await expect(downloadAndStageUpdate(root)).rejects.toMatchObject({ status: 502 })
     } finally {
       rmSync(root, { recursive: true, force: true })
