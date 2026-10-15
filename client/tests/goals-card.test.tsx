@@ -96,7 +96,7 @@ function Harness({
 }
 
 describe('GoalCard', () => {
-  it('starts collapsed and reveals the diary on click', async () => {
+  it('starts collapsed, reveals the diary on click and keeps the composer hidden until edit', async () => {
     const user = userEvent.setup()
     render(<Harness goal={makeGoal()} />)
     expect(screen.queryByText('Дневник')).toBeNull()
@@ -105,6 +105,9 @@ describe('GoalCard', () => {
     await user.click(screen.getByRole('button', { expanded: false }))
 
     expect(screen.getByText('Дневник')).toBeTruthy()
+    expect(screen.queryByLabelText('Заметка в дневник')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Редактировать цель' }))
     expect(screen.getByLabelText('Заметка в дневник')).toBeTruthy()
   })
 
@@ -112,7 +115,7 @@ describe('GoalCard', () => {
     render(<Harness goal={makeGoal()} defaultExpanded />)
     expect(screen.getByRole('button', { expanded: true })).toBeTruthy()
     expect(screen.getByText('Дневник')).toBeTruthy()
-    expect(screen.getByLabelText('Заметка в дневник')).toBeTruthy()
+    expect(screen.queryByLabelText('Заметка в дневник')).toBeNull()
   })
 
   it('collapses and re-expands a default-expanded card by click', async () => {
@@ -127,6 +130,21 @@ describe('GoalCard', () => {
     await user.click(screen.getByRole('button', { expanded: false }))
     expect(screen.getByText('Дневник')).toBeTruthy()
     expect(screen.getByRole('button', { expanded: true })).toBeTruthy()
+  })
+
+  it('reveals the card from the pencil and collapses it with the chevron', async () => {
+    const user = userEvent.setup()
+    render(<Harness goal={makeGoal()} />)
+    expect(screen.queryByText('Дневник')).toBeNull()
+
+    await user.click(screen.getByLabelText('Редактировать цель'))
+    expect(screen.getByText('Дневник')).toBeTruthy()
+    expect(screen.getByLabelText('Заметка в дневник')).toBeTruthy()
+
+    await user.click(screen.getByLabelText('Свернуть'))
+    await waitFor(() => expect(screen.queryByText('Дневник')).toBeNull())
+    expect(screen.queryByLabelText('Заметка в дневник')).toBeNull()
+    expect(screen.getByRole('button', { expanded: false })).toBeTruthy()
   })
 
   it('hides the diary again when the card collapses', async () => {
@@ -144,6 +162,7 @@ describe('GoalCard', () => {
     const onAddEntry = vi.fn().mockResolvedValue(undefined)
     render(<Harness goal={makeGoal()} onAddEntry={onAddEntry} />)
     await user.click(screen.getByRole('button', { expanded: false }))
+    await user.click(screen.getByRole('button', { name: 'Редактировать цель' }))
 
     const input = screen.getByLabelText('Заметка в дневник')
     await user.type(input, 'Новая запись')
@@ -246,6 +265,9 @@ describe('GoalCard', () => {
     expect(screen.queryByLabelText('Заметка в дневник')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Завершить' })).toBeNull()
     expect(screen.getByText(/Не достигнута ·/)).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: 'Редактировать цель' }))
+    expect(screen.getByLabelText('Заметка в дневник')).toBeTruthy()
   })
 
   it('renders the custom title and the binary ring instead of a percent', () => {
@@ -260,6 +282,10 @@ describe('GoalCard', () => {
     expect(screen.queryByText('Чеклист')).toBeNull()
     await user.click(screen.getByRole('button', { expanded: false }))
     expect(screen.getByText('Чеклист')).toBeTruthy()
+    expect(screen.getByLabelText('гигиена')).toBeTruthy()
+    expect(screen.queryByLabelText('Новый пункт')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Редактировать цель' }))
     expect(screen.getByLabelText('Новый пункт')).toBeTruthy()
   })
 
@@ -268,6 +294,7 @@ describe('GoalCard', () => {
     const onSetChecklist = vi.fn().mockResolvedValue(undefined)
     render(<Harness goal={makeGoal()} onSetChecklist={onSetChecklist} />)
     await user.click(screen.getByRole('button', { expanded: false }))
+    await user.click(screen.getByRole('button', { name: 'Редактировать цель' }))
 
     const input = screen.getByLabelText('Новый пункт')
     await user.type(input, 'разобрать руки')
@@ -429,5 +456,43 @@ describe('GoalCard', () => {
 
     await user.keyboard('{Escape}')
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Просмотр изображения' })).toBeNull())
+  })
+
+  it('offers a partial status through the popover menu', async () => {
+    const user = userEvent.setup()
+    const onSetChecklist = vi.fn().mockResolvedValue(undefined)
+    render(<Harness goal={makeGoal({ checklist: [{ id: 'a', text: 'гигиена', status: 'pending' }] })} onSetChecklist={onSetChecklist} />)
+    await user.click(screen.getByRole('button', { expanded: false }))
+
+    await user.click(screen.getByRole('button', { name: 'гигиена' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Частично' }))
+    expect(onSetChecklist).toHaveBeenLastCalledWith(1, [{ id: 'a', text: 'гигиена', status: 'partial' }])
+  })
+
+  it('keeps a history card locked until edit mode, then unlocks editing', async () => {
+    const user = userEvent.setup()
+    const onSetChecklist = vi.fn().mockResolvedValue(undefined)
+    render(
+      <Harness
+        readOnly
+        onSetChecklist={onSetChecklist}
+        goal={makeGoal({
+          status: 'failed',
+          failedAt: '2026-09-20 10:00:00',
+          finalPercent: 0,
+          finalUnits: 0,
+          checklist: [{ id: 'a', text: 'гигиена', status: 'pending' }]
+        })}
+      />
+    )
+    await user.click(screen.getByRole('button', { expanded: false }))
+
+    await user.click(screen.getByRole('button', { name: 'гигиена' }))
+    expect(screen.queryByRole('menuitem', { name: 'Выполнено' })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Редактировать цель' }))
+    await user.click(screen.getByRole('button', { name: 'гигиена' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Выполнено' }))
+    expect(onSetChecklist).toHaveBeenCalledWith(1, [{ id: 'a', text: 'гигиена', status: 'completed' }])
   })
 })

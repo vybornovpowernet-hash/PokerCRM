@@ -56,10 +56,12 @@ export function currentLabel(metric: GoalMetric, current: number): string {
 
 export function checklistProgressLabel(checklist: { status: ChecklistStatus }[]): string {
   const completed = checklist.filter((item) => item.status === 'completed').length
+  const partial = checklist.filter((item) => item.status === 'partial').length
   const mod10 = checklist.length % 10
   const mod100 = checklist.length % 100
   const noun = mod10 === 1 && mod100 !== 11 ? 'пункта' : 'пунктов'
-  return checklist.length === 0 ? '0 из 0 пунктов' : `${completed} из ${checklist.length} ${noun}`
+  const base = checklist.length === 0 ? '0 из 0 пунктов' : `${completed} из ${checklist.length} ${noun}`
+  return partial > 0 ? `${base} · ${partial} частично` : base
 }
 
 export function goalPhrase(goal: { metric: GoalMetric; targetUnits: number; title?: string | null }): string {

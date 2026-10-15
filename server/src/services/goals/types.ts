@@ -4,7 +4,7 @@ export type GoalTerminalStatus = Exclude<GoalStatus, 'active'>
 export type GoalCloseOutcome = 'achieved' | 'failed'
 export type GoalEntryKind = 'system' | 'user'
 
-export type ChecklistStatus = 'pending' | 'completed' | 'failed'
+export type ChecklistStatus = 'pending' | 'completed' | 'partial' | 'failed'
 
 export interface ChecklistItem {
   id: string

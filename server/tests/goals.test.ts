@@ -360,10 +360,56 @@ describe('goal checklists', () => {
     ])
   })
 
-  it('refuses to change the checklist of a settled goal', () => {
+  it('allows changing the checklist of a settled goal without reopening it', () => {
     const goal = createGoal({ metric: 'distance', targetUnits: 100 })
+    const closed = closeGoal(goal.id, 'failed')
+    expect(closed.finalPercent).toBe(0)
+
+    const updated = setChecklist(goal.id, items('x'))
+    expect(updated.status).toBe('failed')
+    expect(updated.checklist).toEqual([{ id: 'id-0', text: 'x', status: 'pending' }])
+    expect(updated.progress).toMatchObject({ currentUnits: 0, percent: 0, blank: false })
+  })
+
+  it('reports live checklist progress for a settled custom goal, not the frozen snapshot', () => {
+    const goal = createGoal({ metric: 'custom', targetUnits: 1, title: 'Ремонт' })
+    setChecklist(goal.id, items('двери', 'окна'))
+    const failed = closeGoal(goal.id, 'failed')
+    expect(failed.finalPercent).toBe(0)
+
+    const edited = setChecklist(goal.id, [
+      { id: 'id-0', text: 'двери', status: 'completed' },
+      { id: 'id-1', text: 'окна', status: 'completed' }
+    ])
+    expect(edited.status).toBe('failed')
+    expect(edited.progress).toMatchObject({ currentUnits: 2, percent: 100, blank: false })
+  })
+
+  it('derives settled binary progress from the live checklist on the light read path', () => {
+    const goal = createGoal({ metric: 'custom', targetUnits: 1, title: 'Ремонт' })
+    setChecklist(goal.id, items('двери', 'окна'))
     closeGoal(goal.id, 'failed')
-    expect(() => setChecklist(goal.id, items('x'))).toThrow(HttpError)
+    setChecklist(goal.id, [
+      { id: 'id-0', text: 'двери', status: 'completed' },
+      { id: 'id-1', text: 'окна', status: 'pending' }
+    ])
+
+    const [listed] = listGoals()
+    expect(listed.status).toBe('failed')
+    expect(listed.progress).toMatchObject({ currentUnits: 1, percent: 50, blank: false })
+  })
+
+  it('keeps the frozen snapshot for a settled metric goal', () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    const goal = createGoal({ metric: 'distance', targetUnits: 10 })
+    for (let i = 0; i < 5; i++) insertTournament(room, `2026-09-${String(i + 1).padStart(2, '0')}`, 550, 0, 'USD')
+    closeGoal(goal.id, 'failed')
+
+    for (let i = 5; i < 10; i++) insertTournament(room, `2026-09-${String(i + 1).padStart(2, '0')}`, 550, 0, 'USD')
+
+    const [listed] = listGoals()
+    expect(listed.status).toBe('failed')
+    expect(listed.progress).toMatchObject({ currentUnits: 5, percent: 50, blank: false })
   })
 
   it('drives custom goal progress by the checked share', () => {
@@ -379,6 +425,17 @@ describe('goal checklists', () => {
     ])
     expect(half.status).toBe('active')
     expect(half.progress).toMatchObject({ currentUnits: 2, percent: 66, blank: false })
+  })
+
+  it('weights a partial checklist item at half progress', () => {
+    const goal = createGoal({ metric: 'custom', targetUnits: 1, title: 'Ремонт' })
+    setChecklist(goal.id, items('двери', 'окна'))
+    const half = setChecklist(goal.id, [
+      { id: 'id-0', text: 'двери', status: 'completed' },
+      { id: 'id-1', text: 'окна', status: 'partial' }
+    ])
+    expect(half.status).toBe('active')
+    expect(half.progress).toMatchObject({ currentUnits: 1, percent: 75, blank: false })
   })
 
   it('does not settle a custom goal when a resolved item failed (daily-only rule)', () => {
@@ -758,6 +815,15 @@ describe('daily goals', () => {
       { id: created.checklist[1]!.id, text: 'Б', status: 'pending' }
     ])
     expect(partial.status).toBe('active')
+  })
+
+  it('does not settle a daily goal while an item is partial', () => {
+    const created = createGoal({ metric: 'daily', targetUnits: 1, title: 'День', checklist: ['А', 'Б'] })
+    const mixed = setChecklist(created.id, [
+      { id: created.checklist[0]!.id, text: 'А', status: 'completed' },
+      { id: created.checklist[1]!.id, text: 'Б', status: 'partial' }
+    ])
+    expect(mixed.status).toBe('active')
   })
 
   it('auto-fails a daily goal once every item is resolved with a failure', () => {

@@ -95,7 +95,7 @@ function validateChecklist(value: unknown): ChecklistItem[] {
     const text = item.text.trim()
     if (text.length < 1 || text.length > MAX_CHECKLIST_ITEM_TEXT) throw new HttpError(400, `items: text must be 1-${MAX_CHECKLIST_ITEM_TEXT} characters`)
     const status = normalizeChecklistStatus({ status: item.status, done: item.done })
-    if (status === null) throw new HttpError(400, 'items: status must be pending, completed or failed')
+    if (status === null) throw new HttpError(400, 'items: status must be pending, completed, partial or failed')
     seen.add(item.id)
     items.push({ id: item.id, text, status })
   }
@@ -268,7 +268,6 @@ export function acknowledgeGoal(id: number): GoalWithProgress {
 
 export function setChecklist(id: number, items: unknown): GoalWithProgress {
   const goal = requireGoal(id)
-  if (goal.status !== 'active') throw new HttpError(400, 'Only active goals can change their checklist')
   const checklist = validateChecklist(items)
   const updated = withTransaction(() => updateChecklist(goal.id, checklist))
   return reconcileGoal(updated, collectGoalsFacts())

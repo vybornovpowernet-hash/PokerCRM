@@ -1,6 +1,6 @@
 import type { ChecklistStatus } from './types.js'
 
-const CHECKLIST_STATUSES: readonly ChecklistStatus[] = ['pending', 'completed', 'failed']
+const CHECKLIST_STATUSES: readonly ChecklistStatus[] = ['pending', 'completed', 'partial', 'failed']
 
 export function isChecklistStatus(value: unknown): value is ChecklistStatus {
   return typeof value === 'string' && (CHECKLIST_STATUSES as readonly string[]).includes(value)

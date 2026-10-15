@@ -24,24 +24,30 @@ function emitIfMissing(goal: Goal, milestone: number, content: string): void {
  * Live progress of a goal as of now. Exported so `closeGoal` can freeze the
  * exact snapshot that the history view shows.
  */
-export function computeProgress(goal: Goal, facts: GoalsFacts): GoalProgress {
-  const hasChecklist = goal.checklist.length > 0
-  if (isBinaryMetric(goal.metric)) {
-    const completedCount = goal.checklist.filter((item) => item.status === 'completed').length
-    return hasChecklist
-      ? { currentUnits: completedCount, percent: Math.floor((completedCount * 100) / goal.checklist.length), blank: false }
-      : { currentUnits: null, percent: goal.status === 'achieved' ? 100 : 0, blank: false }
+function binaryProgress(goal: Goal): GoalProgress {
+  if (goal.checklist.length === 0) {
+    return { currentUnits: null, percent: goal.status === 'achieved' ? 100 : 0, blank: false }
   }
+  const completedCount = goal.checklist.filter((item) => item.status === 'completed').length
+  const partialCount = goal.checklist.filter((item) => item.status === 'partial').length
+  const score = completedCount + partialCount * 0.5
+  return { currentUnits: completedCount, percent: Math.floor((score * 100) / goal.checklist.length), blank: false }
+}
+
+export function computeProgress(goal: Goal, facts: GoalsFacts): GoalProgress {
+  if (isBinaryMetric(goal.metric)) return binaryProgress(goal)
   const current = getResolver(goal.metric).current(facts)
   return { currentUnits: current, percent: metricPercent(goal, current ?? 0), blank: current === null }
 }
 
 /**
- * A terminal goal shows the progress frozen at close time, not a value that
- * keeps drifting with the live bankroll.
+ * A settled metric goal shows the progress frozen at close time, not a value
+ * that keeps drifting with the live bankroll. Binary goals are driven by their
+ * checklist, so they stay live: editing history keeps the ring and the label
+ * (`checklistProgressLabel`) in sync.
  */
 function withSnapshot(goal: Goal, computed: GoalProgress): GoalProgress {
-  if (goal.status !== 'active' && goal.finalPercent !== null) {
+  if (goal.status !== 'active' && goal.finalPercent !== null && !isBinaryMetric(goal.metric)) {
     return { currentUnits: goal.finalUnits, percent: goal.finalPercent, blank: false }
   }
   return computed
@@ -60,6 +66,7 @@ export function reconcileGoal(goal: Goal, facts: GoalsFacts): GoalWithProgress {
   const isBinary = isBinaryMetric(goal.metric)
   const allCompleted = hasChecklist && goal.checklist.every((item) => item.status === 'completed')
   const hasPending = goal.checklist.some((item) => item.status === 'pending')
+  const hasPartial = goal.checklist.some((item) => item.status === 'partial')
   const resolver = getResolver(goal.metric)
   const current = isBinary ? null : resolver.current(facts)
   const value = current ?? 0
@@ -72,7 +79,7 @@ export function reconcileGoal(goal: Goal, facts: GoalsFacts): GoalWithProgress {
 
   // A daily goal is owned by its day: once every item is resolved it settles on
   // the spot. All completed is a win; a failed item makes the whole day a miss.
-  const dailyResolvedWithFailure = goal.metric === 'daily' && hasChecklist && !hasPending && !allCompleted
+  const dailyResolvedWithFailure = goal.metric === 'daily' && hasChecklist && !hasPending && !hasPartial && !allCompleted
 
   // Deadline auto-fail only when progress is trackable: a metric goal must have
   // a converted current value (blank bankroll days stay conservative), a
@@ -120,13 +127,17 @@ export function reconcileGoal(goal: Goal, facts: GoalsFacts): GoalWithProgress {
 
 /**
  * Reconciling a goal whose state is already terminal never touches the facts or
- * mutates anything: the progress is the frozen snapshot and the entries are
- * read-only history. `listGoals` uses this instead of `reconcileGoal` when the
- * whole requested subset is finished (e.g. the monthly daily view), so a
- * read-only query never pays for `collectGoalsFacts`.
+ * mutates anything: metric goals keep the frozen snapshot, binary goals derive
+ * their progress from the live checklist, and the entries are read-only history.
+ * `listGoals` uses this instead of `reconcileGoal` when the whole requested
+ * subset is finished (e.g. the monthly daily view), so a read-only query never
+ * pays for `collectGoalsFacts`.
  */
 export function lightReconcile(goal: Goal): GoalWithProgress {
-  const progress =
-    goal.finalPercent !== null ? { currentUnits: goal.finalUnits, percent: goal.finalPercent, blank: false } : { currentUnits: null, percent: 0, blank: false }
+  const progress = isBinaryMetric(goal.metric)
+    ? binaryProgress(goal)
+    : goal.finalPercent !== null
+      ? { currentUnits: goal.finalUnits, percent: goal.finalPercent, blank: false }
+      : { currentUnits: null, percent: 0, blank: false }
   return { ...goal, progress, entries: listEntries(goal.id) }
 }

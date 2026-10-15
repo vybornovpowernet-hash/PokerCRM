@@ -167,13 +167,16 @@ describe('goals routes', () => {
     expect((await app.inject({ method: 'PUT', url: '/api/goals/9999/checklist', payload: { items: [] } })).statusCode).toBe(404)
   })
 
-  it('rejects checklist changes on a settled goal', async () => {
+  it('allows checklist changes on a settled goal without reopening it', async () => {
     const { body } = await post({ metric: 'distance', targetUnits: 10 })
     const goalId = (body.goal as { id: number }).id
     await post({ outcome: 'achieved' }, `/api/goals/${goalId}/close`)
 
-    const res = await app.inject({ method: 'PUT', url: `/api/goals/${goalId}/checklist`, payload: { items: [] } })
-    expect(res.statusCode).toBe(400)
+    const items = [{ id: 'id-0', text: 'гигиена', status: 'completed' }]
+    const res = await app.inject({ method: 'PUT', url: `/api/goals/${goalId}/checklist`, payload: { items } })
+    expect(res.statusCode).toBe(200)
+    expect((JSON.parse(res.body).goal as { status: string; checklist: typeof items }).status).toBe('achieved')
+    expect((JSON.parse(res.body).goal as { checklist: typeof items }).checklist).toEqual(items)
   })
 
   it('persists a manual order through PUT /api/goals/order', async () => {

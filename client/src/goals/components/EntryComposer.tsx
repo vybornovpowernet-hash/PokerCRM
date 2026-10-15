@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import type { ChangeEvent, ReactNode } from 'react'
+import type { ChangeEvent } from 'react'
 import { MAX_DIARY_LENGTH, diaryTextLength } from '../diaryHtml'
 import { DiaryEditor } from './DiaryEditor'
 import { PaperclipIcon } from './icons'
@@ -15,10 +15,9 @@ interface EntryComposerProps {
   busy: boolean
   onAdd: (content: string, images: string[]) => Promise<unknown>
   onUpload: (file: File) => Promise<string>
-  actions?: ReactNode
 }
 
-export function EntryComposer({ busy, onAdd, onUpload, actions }: EntryComposerProps) {
+export function EntryComposer({ busy, onAdd, onUpload }: EntryComposerProps) {
   const [html, setHtml] = useState('')
   const [attachments, setAttachments] = useState<ImageAttachment[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -139,7 +138,6 @@ export function EntryComposer({ busy, onAdd, onUpload, actions }: EntryComposerP
             {length} / {MAX_DIARY_LENGTH}
           </span>
         </div>
-        {actions && <div className="flex items-center justify-end gap-2">{actions}</div>}
       </div>
 
       {error && (

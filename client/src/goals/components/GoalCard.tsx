@@ -2,12 +2,14 @@ import { useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { AnimatePresence, motion, Reorder, useDragControls } from 'motion/react'
 import { AchievedHalo } from './AchievedHalo'
+import { Collapse } from './Collapse'
 import { ConfirmDialog } from './ConfirmDialog'
 import { EntryComposer } from './EntryComposer'
 import { GoalChecklist } from './GoalChecklist'
 import { GoalOutcomeDialog } from './GoalOutcomeDialog'
 import { GoalRing } from './GoalRing'
 import { GoalTimeline } from './GoalTimeline'
+import { PencilIcon } from './icons'
 import {
   checklistProgressLabel,
   currentLabel,
@@ -60,6 +62,7 @@ export function GoalCard({ goal, defaultExpanded = false, onClose, onSetChecklis
   const [pending, setPending] = useState<PendingClose | null>(null)
   const [outcomeOpen, setOutcomeOpen] = useState(false)
   const [override, setOverride] = useState<boolean | null>(null)
+  const [isEditing, setIsEditing] = useState(false)
   const open = override ?? defaultExpanded
   const dragControls = useDragControls()
   const dragged = useRef(false)
@@ -71,6 +74,7 @@ export function GoalCard({ goal, defaultExpanded = false, onClose, onSetChecklis
   const isActive = goal.status === 'active'
   const timeInfo = goalTimeLabel(goal)
   const completed = historyDate(goal)
+  const interactive = !readOnly || isEditing
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true)
@@ -112,7 +116,20 @@ export function GoalCard({ goal, defaultExpanded = false, onClose, onSetChecklis
       dragged.current = false
       return
     }
-    setOverride((prev) => ((prev ?? defaultExpanded) ? false : true))
+    const next = !(override ?? defaultExpanded)
+    setOverride(next)
+    // Collapsing the card leaves edit mode: the composer belongs to an open card.
+    if (!next) setIsEditing(false)
+  }
+
+  const toggleEdit = () => {
+    if (isEditing) {
+      setIsEditing(false)
+      return
+    }
+    // The pencil reveals the card so the editor is actually visible.
+    if (!open) setOverride(true)
+    setIsEditing(true)
   }
 
   const moveByKeyboard = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
@@ -130,60 +147,18 @@ export function GoalCard({ goal, defaultExpanded = false, onClose, onSetChecklis
     <>
       <AchievedHalo active={goal.status === 'achieved'} />
 
-      <div className="absolute right-5 top-5 z-10 flex items-center gap-3" data-no-drag>
-        {sortable && (
-          <span aria-hidden="true" className="text-slate-600 transition-colors duration-150 group-hover:text-slate-400">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-              <circle cx="9" cy="6" r="1.6" />
-              <circle cx="15" cy="6" r="1.6" />
-              <circle cx="9" cy="12" r="1.6" />
-              <circle cx="15" cy="12" r="1.6" />
-              <circle cx="9" cy="18" r="1.6" />
-              <circle cx="15" cy="18" r="1.6" />
-            </svg>
-          </span>
-        )}
-        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${STATUS_CHIP[goal.status]}`}>
-          <span className={`inline-block h-1.5 w-1.5 rounded-full ${STATUS_CHIP_DOT[goal.status]}`} />
-          {STATUS_LABELS[goal.status]}
-        </span>
-        {!readOnly && (
-          <button
-            type="button"
-            onClick={() => setOutcomeOpen(true)}
-            disabled={busy}
-            aria-label="Закрыть цель"
-            className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-500/15 hover:text-slate-200 disabled:opacity-50"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M18 6 6 18M6 6l12 12" />
-            </svg>
-          </button>
-        )}
-      </div>
-
-      <button
-        type="button"
-        onClick={toggleCard}
-        onKeyDown={moveByKeyboard}
-        aria-expanded={open}
-        aria-controls={`goal-details-${goal.id}`}
-        className="block w-full rounded-xl text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/50"
-      >
-        <div className="flex items-start gap-6 pr-16">
+      <div className="flex items-start gap-4">
+        <button
+          type="button"
+          onClick={toggleCard}
+          onKeyDown={moveByKeyboard}
+          aria-expanded={open}
+          aria-controls={`goal-details-${goal.id}`}
+          className="flex min-w-0 flex-1 items-start gap-6 rounded-xl text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/50"
+        >
           <GoalRing percent={pct} status={goal.status} binary={isBinary && !hasChecklist} />
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h3 className="text-xl font-semibold tracking-tight text-slate-100">{goalPhrase(goal)}</h3>
-              <span
-                aria-hidden="true"
-                className={`ml-auto shrink-0 text-slate-500 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
-              </span>
-            </div>
+            <h3 className="truncate text-xl font-semibold tracking-tight text-slate-100">{goalPhrase(goal)}</h3>
 
             {hasProgress && (
               <p className="mt-1.5 text-sm text-slate-400">
@@ -229,8 +204,70 @@ export function GoalCard({ goal, defaultExpanded = false, onClose, onSetChecklis
               </div>
             )}
           </div>
+        </button>
+
+        <div className="flex shrink-0 items-center gap-1" data-no-drag>
+          {sortable && (
+            <span aria-hidden="true" className="text-slate-600 transition-colors duration-150 group-hover:text-slate-400">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="9" cy="6" r="1.6" />
+                <circle cx="15" cy="6" r="1.6" />
+                <circle cx="9" cy="12" r="1.6" />
+                <circle cx="15" cy="12" r="1.6" />
+                <circle cx="9" cy="18" r="1.6" />
+                <circle cx="15" cy="18" r="1.6" />
+              </svg>
+            </span>
+          )}
+          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${STATUS_CHIP[goal.status]}`}>
+            <span className={`inline-block h-1.5 w-1.5 rounded-full ${STATUS_CHIP_DOT[goal.status]}`} />
+            {STATUS_LABELS[goal.status]}
+          </span>
+          <button
+            type="button"
+            onClick={toggleEdit}
+            aria-pressed={isEditing}
+            aria-label="Редактировать цель"
+            className={`rounded-lg p-1.5 transition ${
+              isEditing ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-500 hover:bg-slate-500/15 hover:text-slate-200'
+            }`}
+          >
+            <PencilIcon className="h-4 w-4" />
+          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => setOutcomeOpen(true)}
+              disabled={busy}
+              aria-label="Закрыть цель"
+              className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-500/15 hover:text-slate-200 disabled:opacity-50"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={toggleCard}
+            aria-label={open ? 'Свернуть' : 'Развернуть'}
+            className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-500/15 hover:text-slate-200 active:scale-[0.97]"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              className={`transition-transform duration-300 motion-reduce:transition-none ${open ? 'rotate-180' : ''}`}
+            >
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
         </div>
-      </button>
+      </div>
 
       <AnimatePresence initial={false}>
         {open && (
@@ -253,7 +290,8 @@ export function GoalCard({ goal, defaultExpanded = false, onClose, onSetChecklis
               <GoalChecklist
                 items={goal.checklist}
                 busy={busy}
-                readOnly={readOnly}
+                interactive={interactive}
+                showAddForm={isEditing}
                 onChange={(items) => onSetChecklist(goal.id, items)}
               />
             </div>
@@ -266,63 +304,62 @@ export function GoalCard({ goal, defaultExpanded = false, onClose, onSetChecklis
 
               <GoalTimeline
                 entries={goal.entries}
-                readonly={readOnly}
+                readonly={readOnly && !isEditing}
                 busy={busy}
                 onEditEntry={(entryId, content, images) => onEditEntry(goal.id, entryId, content, images)}
                 onDeleteEntry={(entryId) => onDeleteEntry(goal.id, entryId)}
               />
 
-              {!readOnly && (
-                <div className="mt-4">
+              <Collapse open={isEditing}>
+                <div className="pt-4">
                   <EntryComposer
                     busy={busy}
                     onAdd={(content, images) => onAddEntry(goal.id, content, images)}
                     onUpload={onUploadImage}
-                    actions={
-                      goal.status === 'active' && (
-                        <div className="flex flex-wrap items-center gap-2">
-                          {isBinary && goal.checklist.length === 0 && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setPending({
-                                  outcome: 'achieved',
-                                  title: goal.metric === 'daily' ? 'День выполнен?' : 'Отметить цель выполненной?',
-                                  message: goal.metric === 'daily' ? 'Дело перейдёт в ежедневник как выполненное.' : 'Цель перейдёт в историю как достигнутая.',
-                                  confirmLabel: goal.metric === 'daily' ? 'Выполнено' : 'Выполнена',
-                                  tone: 'default'
-                                })
-                              }
-                              disabled={busy}
-                              className="rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-slate-950 transition hover:bg-emerald-400 disabled:opacity-50"
-                            >
-                              {goal.metric === 'daily' ? 'Выполнено' : 'Выполнена'}
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setPending({
-                                outcome: 'failed',
-                                title: goal.metric === 'daily' ? 'День не выполнен?' : 'Отметить цель не достигнутой?',
-                                message: goal.metric === 'daily' ? 'Дело перейдёт в ежедневник как не выполненное.' : 'Цель перейдёт в историю как не достигнутая.',
-                                confirmLabel: 'Завершить',
-                                tone: isBinary ? 'default' : 'danger'
-                              })
-                            }
-                            disabled={busy}
-                            className={`rounded-lg border px-3 py-1.5 text-sm transition disabled:opacity-50 ${
-                              isBinary
-                                ? 'border-slate-600/60 text-slate-300 hover:bg-slate-700/40'
-                                : 'border-rose-500/40 text-rose-300 hover:bg-rose-500/10'
-                            }`}
-                          >
-                            Завершить
-                          </button>
-                        </div>
-                      )
-                    }
                   />
+                </div>
+              </Collapse>
+
+              {isActive && (
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  {isBinary && goal.checklist.length === 0 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPending({
+                          outcome: 'achieved',
+                          title: goal.metric === 'daily' ? 'День выполнен?' : 'Отметить цель выполненной?',
+                          message: goal.metric === 'daily' ? 'Дело перейдёт в ежедневник как выполненное.' : 'Цель перейдёт в историю как достигнутая.',
+                          confirmLabel: goal.metric === 'daily' ? 'Выполнено' : 'Выполнена',
+                          tone: 'default'
+                        })
+                      }
+                      disabled={busy}
+                      className="rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-slate-950 transition hover:bg-emerald-400 disabled:opacity-50"
+                    >
+                      {goal.metric === 'daily' ? 'Выполнено' : 'Выполнена'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPending({
+                        outcome: 'failed',
+                        title: goal.metric === 'daily' ? 'День не выполнен?' : 'Отметить цель не достигнутой?',
+                        message: goal.metric === 'daily' ? 'Дело перейдёт в ежедневник как не выполненное.' : 'Цель перейдёт в историю как не достигнутая.',
+                        confirmLabel: 'Завершить',
+                        tone: isBinary ? 'default' : 'danger'
+                      })
+                    }
+                    disabled={busy}
+                    className={`rounded-lg border px-3 py-1.5 text-sm transition disabled:opacity-50 ${
+                      isBinary
+                        ? 'border-slate-600/60 text-slate-300 hover:bg-slate-700/40'
+                        : 'border-rose-500/40 text-rose-300 hover:bg-rose-500/10'
+                    }`}
+                  >
+                    Завершить
+                  </button>
                 </div>
               )}
             </div>

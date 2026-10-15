@@ -13,7 +13,7 @@ export interface GoalEntry {
   createdAt: string
 }
 
-export type ChecklistStatus = 'pending' | 'completed' | 'failed'
+export type ChecklistStatus = 'pending' | 'completed' | 'partial' | 'failed'
 
 export interface ChecklistItem {
   id: string
