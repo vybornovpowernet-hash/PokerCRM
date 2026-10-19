@@ -543,14 +543,23 @@ export default function TransactionsPage() {
                     )}
                   </td>
                   <td className="w-[160px] whitespace-nowrap px-4 py-3 text-right">
-                    <div className="flex justify-end gap-2">
-                      <button onClick={() => startEdit(t)} className="rounded px-2 py-1 text-xs text-slate-400 transition hover:bg-slate-800 hover:text-slate-100">
-                        Изменить
-                      </button>
-                      <button onClick={() => handleDelete(t)} className="rounded px-2 py-1 text-xs text-red-400 transition hover:bg-red-950/40 hover:text-red-300">
-                        Удалить
-                      </button>
-                    </div>
+                    {t.writeoff ? (
+                      <span
+                        title="Системное списание закрытия дня: оно уже учтено в балансе за этот день, поэтому не редактируется"
+                        className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-500"
+                      >
+                        Списание
+                      </span>
+                    ) : (
+                      <div className="flex justify-end gap-2">
+                        <button onClick={() => startEdit(t)} className="rounded px-2 py-1 text-xs text-slate-400 transition hover:bg-slate-800 hover:text-slate-100">
+                          Изменить
+                        </button>
+                        <button onClick={() => handleDelete(t)} className="rounded px-2 py-1 text-xs text-red-400 transition hover:bg-red-950/40 hover:text-red-300">
+                          Удалить
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               )

@@ -13,6 +13,8 @@ import { closeDb, initDb, runMigrations, setDbForTests, resetDbForTests, withTra
  *
  * v29 rebuilds `transactions` with an FK to `rooms`, so fixtures that jump past
  * v1 also need the parent table; its shape matches the v11-era rooms schema.
+ * v30 only ADDs a column to whatever `transactions` exists, so no fixture help
+ * is needed for it.
  */
 function legacyLedgerSchema(db: DatabaseSync): void {
   db.exec(`
@@ -115,7 +117,7 @@ describe('db', () => {
     expect(names).not.toContain('casino_writeoffs')
 
     const version = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-    expect(version).toBe(29)
+    expect(version).toBe(30)
 
     const roomCols = db
       .prepare('PRAGMA table_info(rooms)')
@@ -263,7 +265,7 @@ describe('db', () => {
     expect(isWallet('Bybit')).toBe(1)
     expect(isWallet('bybit')).toBe(1)
     expect(isWallet(' PokerDom ')).toBe(0)
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
 
     db.close()
     rmSync(dir, { recursive: true, force: true })
@@ -356,7 +358,7 @@ describe('db', () => {
       .map((r) => (r as { name: string }).name)
     expect(goalCols).toContain('title')
     expect((db.prepare('SELECT title FROM goals').get() as { title: string | null }).title).toBeNull()
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
 
     db.close()
     rmSync(dir, { recursive: true, force: true })
@@ -454,7 +456,7 @@ describe('db', () => {
     expect(rows.map((r) => r.is_mbr)).toEqual([1, 1, 0, 0])
     expect(rows.map((r) => r.name)).toContain('Daily Turbo 5.50')
     expect((db.prepare('SELECT COUNT(*) AS c FROM tournaments').get() as { c: number }).c).toBe(4)
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
 
     db.close()
     rmSync(dir, { recursive: true, force: true })
@@ -531,7 +533,7 @@ describe('db', () => {
 
     runMigrations(db)
 
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
     const kept = db.prepare('SELECT type, amount, destination_room_id FROM transactions WHERE id = 1').get() as {
       type: string
       amount: number
@@ -620,7 +622,7 @@ describe('db', () => {
 
     runMigrations(db)
 
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
     const seeded = db.prepare("SELECT value FROM settings WHERE key = 'day_start_hour'").get() as { value: string }
     expect(seeded).toEqual({ value: '0' })
 
@@ -761,7 +763,7 @@ describe('db', () => {
     expect((db.prepare("SELECT amount FROM balance_entries WHERE date = '2026-09-16'").get() as { amount: number }).amount).toBe(15000)
     // auto rows are not touched by v18 — the startup recompute rebuilds them
     expect((db.prepare("SELECT amount FROM balance_entries WHERE date = '2026-09-17'").get() as { amount: number }).amount).toBe(5000)
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
 
     db.close()
     rmSync(dir, { recursive: true, force: true })
@@ -808,7 +810,7 @@ describe('db', () => {
       .map((r) => (r as { name: string }).name)
     expect(goalCols).toContain('checklist')
     expect((db.prepare('SELECT checklist FROM goals').get() as { checklist: string }).checklist).toBe('[]')
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
 
     db.close()
     rmSync(dir, { recursive: true, force: true })
@@ -887,7 +889,7 @@ describe('db', () => {
     expect(names).toContain('habits')
     expect(names).toContain('habit_logs')
     expect((db.prepare('SELECT COUNT(*) AS c FROM goals').get() as { c: number }).c).toBe(1)
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
 
     db.close()
     rmSync(dir, { recursive: true, force: true })
@@ -948,7 +950,7 @@ describe('db', () => {
 
     db.prepare("UPDATE goals SET status = 'closed', final_percent = 40, final_units = 4 WHERE id = 1").run()
     expect(db.prepare('SELECT final_percent, final_units FROM goals WHERE id = 1').get()).toEqual({ final_percent: 40, final_units: 4 })
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
 
     db.close()
     rmSync(dir, { recursive: true, force: true })
@@ -1010,7 +1012,7 @@ PRAGMA user_version = 21;
       ['achieved', false],
       ['closed', false]
     ])
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
 
     db.close()
     rmSync(dir, { recursive: true, force: true })
@@ -1060,7 +1062,7 @@ PRAGMA user_version = 22;
       .map((r) => (r as { name: string }).name)
     expect(cols).toContain('color')
     expect(db.prepare('SELECT name, color FROM habits WHERE id = 1').get()).toEqual({ name: 'Медитация', color: '#f1f5f9' })
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
 
     db.close()
     rmSync(dir, { recursive: true, force: true })
@@ -1120,7 +1122,7 @@ PRAGMA user_version = 23;
       (c) => c.name === 'sort_order'
     )
     expect(column).toMatchObject({ notnull: 1, dflt_value: '0' })
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
 
     db.close()
     rmSync(dir, { recursive: true, force: true })
@@ -1162,7 +1164,7 @@ PRAGMA user_version = 24;
       (c) => c.name === 'sort_order'
     )
     expect(column).toMatchObject({ notnull: 1, dflt_value: '0' })
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
 
     db.close()
     rmSync(dir, { recursive: true, force: true })
@@ -1262,7 +1264,7 @@ PRAGMA user_version = 25;
       .all()
       .map((r) => (r as { name: string }).name)
     expect(tables).not.toContain('casino_writeoffs')
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
 
     // re-running migrations on the upgraded db is a no-op
     legacyLedgerSchema(db)
@@ -1313,7 +1315,7 @@ PRAGMA user_version = 25;
 
     runMigrations(db)
 
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
     const row = db.prepare('SELECT content, images FROM goal_entries').get() as { content: string; images: string }
     expect(row.content).toBe('старая заметка')
     expect(row.images).toBe('[]')
@@ -1345,7 +1347,7 @@ PRAGMA user_version = 25;
 
     runMigrations(db)
 
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
     const rows = db.prepare('SELECT date, status FROM habit_logs ORDER BY date').all() as unknown as Record<string, unknown>[]
     expect(rows).toEqual([
       { date: '2026-09-20', status: 'done' },
@@ -1394,7 +1396,7 @@ PRAGMA user_version = 25;
 
     runMigrations(db)
 
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(29)
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
     const kept = db.prepare('SELECT id, room_id, type, amount, fee, destination_room_id FROM transactions ORDER BY id').all() as unknown as Record<
       string,
       number | string | null
@@ -1428,6 +1430,52 @@ PRAGMA user_version = 25;
     // re-running migrations on the upgraded db is a no-op
     runMigrations(db)
     expect((db.prepare('SELECT COUNT(*) AS c FROM transactions').get() as { c: number }).c).toBe(2)
+
+    db.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('v30 flags pre-existing day-closing write-offs and leaves ordinary casino rows editable', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'poker-crm-v30-'))
+    const db = initDb(join(dir, 'v30.sqlite'))
+    db.exec(`
+      DROP TABLE transactions;
+      CREATE TABLE transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        type TEXT NOT NULL CHECK (type IN ('deposit', 'withdraw', 'transfer', 'casino')),
+        amount INTEGER NOT NULL CHECK ((type = 'casino' AND amount <> 0) OR (type <> 'casino' AND amount > 0)),
+        fee INTEGER NOT NULL DEFAULT 0 CHECK (fee >= 0),
+        currency TEXT NOT NULL,
+        direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+        counterpart TEXT,
+        destination_room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
+        date TEXT NOT NULL,
+        comment TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK (type <> 'casino' OR fee = 0)
+      );
+      INSERT INTO rooms (id, name) VALUES (1, 'PokerDom');
+      INSERT INTO transactions (id, room_id, type, amount, fee, currency, direction, date, comment)
+        VALUES (1, 1, 'casino', 20000, 0, 'USD', 'in', '2026-09-10', 'Авто-списание: баланс за день относится к казино (2026-09-10)'),
+               (2, 1, 'casino', 5000, 0, 'USD', 'in', '2026-09-11', 'свой выигрыш'),
+               (3, 1, 'deposit', 10000, 0, 'USD', 'in', '2026-09-08', NULL);
+      PRAGMA user_version = 29;
+    `)
+
+    runMigrations(db)
+
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(30)
+    const rows = db.prepare('SELECT id, writeoff, comment FROM transactions ORDER BY id').all() as unknown as {
+      id: number
+      writeoff: number
+      comment: string | null
+    }[]
+    expect(rows).toEqual([
+      { id: 1, writeoff: 1, comment: 'Авто-списание: баланс за день относится к казино (2026-09-10)' },
+      { id: 2, writeoff: 0, comment: 'свой выигрыш' },
+      { id: 3, writeoff: 0, comment: null }
+    ])
 
     db.close()
     rmSync(dir, { recursive: true, force: true })

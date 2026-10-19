@@ -1,13 +1,12 @@
 import { getDb, withTransaction } from '../db.js'
 import { HttpError } from '../lib/errors.js'
-import { isValidDayKey } from '../lib/date.js'
-import { RATE_SCALE } from '../lib/money.js'
+import { isValidDayKey, addDays } from '../lib/date.js'
 import { getRoom, validateCurrency } from './rooms.js'
 import { getBalance, getBalanceBefore, listForDate, upsertBalance, recomputeRoomBalances } from './balances.js'
 import { recordCasinoPnl } from './funds.js'
 import { computeRoomProfit, sessionRoomProfit } from './sessions.js'
 import type { RoomProfit } from './sessions.js'
-import { resolveCrossScaled, convertToUsd, withRateCache } from './rates/convert.js'
+import { convertCross, convertToUsd, withRateCache } from './rates/convert.js'
 import { pendingImportPairs, reconcilePendingImports, clearPendingImport } from './pending.js'
 
 export interface TournamentRow {
@@ -92,13 +91,13 @@ export interface OrphanedDiscrepancy {
 
 const DISCREPANCY_THRESHOLD = 0.05
 
+/**
+ * Calendar days of a range, by day key. A local-time loop with a fixed 24h step
+ * drifts across a DST fall-back: it repeats one day and never reaches the last
+ * day of the range, so a discrepancy scan silently skips it.
+ */
 function eachDay(dateFrom: string, dateTo: string, cb: (date: string) => void): void {
-  const start = new Date(`${dateFrom}T00:00:00`)
-  const end = new Date(`${dateTo}T00:00:00`)
-  for (let t = start.getTime(); t <= end.getTime(); t += 86_400_000) {
-    const d = new Date(t)
-    cb(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
-  }
+  for (let date = dateFrom; date <= dateTo; date = addDays(date, 1)) cb(date)
 }
 
 function mapRow(r: TournamentRowDb): TournamentRow {
@@ -488,9 +487,11 @@ export function previewDayReconcile(
  * uses, in this transaction. That is what makes the button atomic — the import
  * and the closing casino transaction land together or not at all, and the
  * returned reconciles already describe the closed day (no second round-trip).
- * The write-off is deliberately called LAST, after the rows above and after
- * `recomputeRoomBalances`: the residual it closes is `S − T − X` of the state
- * that is about to be committed, and all of it lives in this transaction.
+ * The re-anchor runs BEFORE the write-off: a batch saved a day late leaves the
+ * modal day with an interpolated balance, and closing it would be refused with
+ * nothing saved — pulling the snapshot onto the modal day first is what gives
+ * the write-off a real measurement to reconcile against. `recomputeRoomBalances`
+ * still runs before both, so the residual is computed on committed state.
  */
 /**
  * Anchor a room's latest manual balance to the import's own dates.
@@ -510,13 +511,19 @@ export function previewDayReconcile(
  *   balance already measures a later state);
  * - a manual anchor already sits on the target day (UNIQUE room+date).
  *
- * Runs inside the caller's transaction, right after the optional write-off:
- * a casino row closing the modal day counts as a transaction on the balance
- * day, which keeps the "Списать" flow on its original behaviour.
+ * Runs inside the caller's transaction, before the optional write-off: a
+ * write-off reconciles against a manual balance, so the re-anchor has to make
+ * the modal day manual first (otherwise the day is still "auto" and the close
+ * is refused with nothing saved).
+ *
+ * `requireTo` pins the destination day. «Списать» passes the modal day, so a
+ * write-off can never pull the snapshot onto a different day than the one it
+ * closes — the closed day would silently lose its basis.
  */
-function reanchorBalanceToBatch(roomId: number, batchDates: string[]): { from: string; to: string } | null {
+function reanchorBalanceToBatch(roomId: number, batchDates: string[], requireTo?: string): { from: string; to: string } | null {
   const move = reanchorTarget(roomId, batchDates)
   if (move === null) return null
+  if (requireTo !== undefined && move.to !== requireTo) return null
 
   const db = getDb()
   db.prepare("DELETE FROM balance_entries WHERE room_id = ? AND date = ? AND source = 'auto'").run(roomId, move.to)
@@ -584,15 +591,22 @@ export function saveDayBatch(
     recomputeRoomBalances(roomId)
     if (cleaned.length > 0 || deduped.length > 0) clearPendingImport(roomId)
     else reconcilePendingImports(roomId)
-    if (options.writeoffCasino) {
-      applyCasinoWriteoff(roomId, modalDate, `Авто-списание: баланс за день относится к казино (${modalDate})`)
-    }
+    // Order matters: the write-off below closes `modalDate`, so that day must
+    // already be manual — the re-anchor is what makes it so when the snapshot
+    // still sits on a later day (import saved a day late). The re-anchor is only
+    // allowed to land on `modalDate` while a write-off rides along: «Списать»
+    // closes the day the popup is open on and must not move the balance to some
+    // other imported day.
+    let reanchored: { from: string; to: string } | null = null
     if (deduped.length > 0) {
       const batchDates = deduped.map((r) => r.date)
       if (cleaned.length > 0) batchDates.push(modalDate)
-      return reanchorBalanceToBatch(roomId, batchDates)
+      reanchored = reanchorBalanceToBatch(roomId, batchDates, options.writeoffCasino ? modalDate : undefined)
     }
-    return null
+    if (options.writeoffCasino) {
+      applyCasinoWriteoff(roomId, modalDate, `Авто-списание: баланс за день относится к казино (${modalDate})`)
+    }
+    return reanchored
   })
 
   const reconcileDates = [...new Set([...affectedDates, ...(reanchored ? [reanchored.from, reanchored.to] : [])])].sort()
@@ -612,7 +626,6 @@ export function adjustBalanceToTournaments(roomId: number, date: string): DayRec
   const current = getBalanceRow(roomId, date)
   if (!current) throw new HttpError(400, 'No balance recorded for this day')
   const prev = getBalanceBefore(roomId, date)
-  const prevAmount = prev ? prev.amount : 0
 
   const reconcile = reconcileDay(roomId, date)
   if (reconcile.blank || reconcile.remainderUsd === null || reconcile.sessionProfitUsd === null) {
@@ -622,18 +635,17 @@ export function adjustBalanceToTournaments(roomId: number, date: string): DayRec
   // sessionProfit = deltaUsd − (in − out)  →  deltaUsd_target = tournaments + casino + (in − out)
   const session = sessionRoomProfit(roomId, date) as NonNullable<ReturnType<typeof sessionRoomProfit>>
   const deltaUsdTarget = reconcile.tournamentProfitUsd + reconcile.casinoUsd + (session.flowInUsd - session.flowOutUsd)
-  const deltaUnits = usdToUnits(deltaUsdTarget, current.currency, date, roomId)
+  // Both operands must live in `current.currency` before they are added: min
+  // units of different currencies are not comparable (a RUB kopeck is not a USD
+  // cent), so a previous entry in another currency is converted the same way
+  // `buildRoomProfit` does it — with this day's frozen rate.
+  const prevUnits = prev === null ? 0 : convertCross(prev.amount, prev.currency, current.currency, date, roomId)
+  if (prevUnits === null) throw new HttpError(400, 'Cannot adjust balance: no rate for the previous balance currency')
+  const deltaUnits = convertCross(deltaUsdTarget, 'USD', current.currency, date, roomId)
   if (deltaUnits === null) throw new HttpError(400, 'Cannot adjust balance: no rate for currency')
 
-  upsertBalance(roomId, date, prevAmount + deltaUnits, current.currency)
+  upsertBalance(roomId, date, prevUnits + deltaUnits, current.currency)
   return reconcileDay(roomId, date)
-}
-
-function usdToUnits(usdAmount: number, currency: string, date: string, roomId: number): number | null {
-  if (currency === 'USD') return usdAmount
-  const rate = resolveCrossScaled('USD', currency, date, roomId)
-  if (rate === null) return null
-  return Math.round((usdAmount * RATE_SCALE) / rate)
 }
 
 function getBalanceRow(roomId: number, date: string): { amount: number; currency: string } | null {
@@ -670,8 +682,9 @@ function getBalanceRow(roomId: number, date: string): { amount: number; currency
  * saving an import the user wanted reconciled is never the better half.
  */
 function applyCasinoWriteoff(roomId: number, date: string, comment: string): DayReconcile {
-  // read AFTER the caller's writes: `saveDayBatch` persists tournaments, then
-  // calls this inside the same transaction, so T is already the imported total
+  // read AFTER the caller's writes: `saveDayBatch` persists tournaments and
+  // re-anchors the balance, then calls this inside the same transaction, so `S`
+  // is the real snapshot and `T` is already the imported total
   const reconcile = reconcileDay(roomId, date)
   const amount = reconcile.remainderUsd
   if (reconcile.blank || amount === null) {

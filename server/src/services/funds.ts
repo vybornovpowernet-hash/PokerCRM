@@ -28,6 +28,8 @@ export interface Transaction {
   comment: string | null
   createdAt: string
   amountUsd: number | null
+  /** System day-closing write-off (`recordCasinoPnl`): immutable. */
+  writeoff: boolean
 }
 
 interface TxRow {
@@ -43,6 +45,7 @@ interface TxRow {
   date: string
   comment: string | null
   created_at: string
+  writeoff: number
   room_name: string
   destination_room_name: string | null
 }
@@ -91,6 +94,7 @@ function mapRow(r: TxRow): Transaction {
     date: r.date,
     comment: r.comment,
     createdAt: r.created_at,
+    writeoff: r.writeoff === 1,
     amountUsd: convertToUsd(r.amount, r.currency, r.date, r.room_id)
   }
 }
@@ -193,6 +197,22 @@ function legsOf(tx: TransactionShape): { roomId: number; units: number }[] {
 }
 
 /**
+ * A day-closing write-off is a judgement about the day's data, not an event
+ * that happened: `recordCasinoPnl` never applies balance legs (the measured
+ * snapshot already contains the result). Editing or deleting such a row through
+ * the ordinary transaction API would apply them anyway — the manual snapshot
+ * would silently move and the day it closed would report itself as reconciled
+ * while holding a wrong balance. The rows are immutable; a day is reopened by
+ * recording a fresh balance snapshot for it in «Балансах».
+ */
+const WRITEOFF_IMMUTABLE =
+  'Нельзя изменить системное списание: оно уже учтено в балансе за этот день. Чтобы открыть день заново, запиши снимок баланса за этот день в «Балансах».'
+
+function assertMutable(tx: Transaction): void {
+  if (tx.writeoff) throw new HttpError(400, WRITEOFF_IMMUTABLE)
+}
+
+/**
  * Applies (sign = 1) or reverses (sign = -1) a transaction on the manual
  * balance recorded on its own day. This is the "user re-entered the current
  * balance after the operation" emulation: a manual balance on a *different*
@@ -245,7 +265,9 @@ export function createTransaction(raw: TransactionInput): Transaction {
  * delta the user has already measured (see `applyCasinoWriteoff`) — so applying
  * it would move the balance a second time and leave the day exactly as far from
  * reconciled. Hence no balance legs and no recompute: the row is pure P&L on a
- * day whose snapshot already contains it.
+ * day whose snapshot already contains it. The symmetry holds both ways: the row
+ * carries `writeoff = 1` and is immutable afterwards (`assertMutable`) —
+ * applying legs on edit/delete would move the snapshot it only documents.
  */
 export function recordCasinoPnl(raw: TransactionInput): Transaction {
   if (raw.type !== 'casino') throw new HttpError(400, 'recordCasinoPnl: type must be casino')
@@ -254,8 +276,8 @@ export function recordCasinoPnl(raw: TransactionInput): Transaction {
   return withTransaction(() => {
     const info = getDb()
       .prepare(
-        `INSERT INTO transactions (room_id, type, amount, fee, currency, direction, comment, date)
-         VALUES (?, 'casino', ?, 0, ?, ?, ?, ?)`
+        `INSERT INTO transactions (room_id, type, amount, fee, currency, direction, comment, date, writeoff)
+         VALUES (?, 'casino', ?, 0, ?, ?, ?, ?, 1)`
       )
       .run(v.room.id, v.amount, v.currency, v.direction, comment, raw.date)
     return getTransaction(Number(info.lastInsertRowid))
@@ -278,6 +300,7 @@ export function getTransaction(id: number): Transaction {
 
 export function updateTransaction(id: number, raw: TransactionInput): Transaction {
   const existing = getTransaction(id)
+  assertMutable(existing)
   const v = validateTransaction(raw)
   const counterpart = validateString(raw.counterpart, 'counterpart', 80)
   const comment = validateString(raw.comment, 'comment', 500)
@@ -311,6 +334,7 @@ export function updateTransaction(id: number, raw: TransactionInput): Transactio
 
 export function deleteTransaction(id: number): void {
   const tx = getTransaction(id)
+  assertMutable(tx)
   withTransaction(() => {
     applyBalanceLegs(tx, -1)
     getDb().prepare('DELETE FROM transactions WHERE id = ?').run(id)

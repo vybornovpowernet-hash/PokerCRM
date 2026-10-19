@@ -521,6 +521,20 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_transactions_room_date ON transactions(room_id, date);
   CREATE INDEX idx_transactions_destination ON transactions(destination_room_id);
   `,
+  // v30: a day-closing write-off (`recordCasinoPnl`) is a judgement about a day,
+  // not an event — its balance legs are deliberately never applied, because the
+  // measured snapshot already contains the result. Editing or deleting such a
+  // row through the ordinary transaction API DID apply those legs, silently
+  // rewriting a manual snapshot (a 300.00 balance became 0.00) and reporting the
+  // day as reconciled. Write-offs are now flagged at creation and refused by
+  // `updateTransaction`/`deleteTransaction`; user-entered casino rows stay
+  // `writeoff = 0` and fully editable. The backfill marks the system-written
+  // ones (`Авто-списание: …`); older standalone write-offs carry an arbitrary
+  // user comment and cannot be recognised retroactively.
+  `
+  ALTER TABLE transactions ADD COLUMN writeoff INTEGER NOT NULL DEFAULT 0;
+  UPDATE transactions SET writeoff = 1 WHERE type = 'casino' AND comment LIKE 'Авто-списание:%';
+  `,
 ]
 
 let dbInstance: DatabaseSync | undefined

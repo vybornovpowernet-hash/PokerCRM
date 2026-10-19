@@ -84,6 +84,8 @@ export interface Transaction {
   comment: string | null
   createdAt: string
   amountUsd: number | null
+  /** System day-closing write-off: immutable on the server, no edit controls. */
+  writeoff: boolean
 }
 
 export interface FlowTotal {

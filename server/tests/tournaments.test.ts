@@ -102,6 +102,42 @@ describe('tournaments', () => {
     expect(reconcile.flagged).toBe(false)
   })
 
+  it('adjusts across a currency switch: the previous balance is converted, not summed', () => {
+    // 10 000.00 RUB sits on 09-09, the day under test is denominated in USD
+    upsertBalance(pokerdon, '2026-09-09', 10_000_00, 'RUB')
+    upsertBalance(pokerdon, '2026-09-10', 200_00, 'USD')
+    replaceDayTournaments(pokerdon, '2026-09-10', [{ buyin: 50_00, result: 80_00, currency: 'RUB' }])
+
+    const target = rubToUsd(30_00) as number
+    const reconcile = adjustBalanceToTournaments(pokerdon, '2026-09-10')
+
+    const entry = getBalance(pokerdon, '2026-09-10')
+    expect(entry?.currency).toBe('USD')
+    // 10 000.00 RUB @ 90 ₽/$ = $111.11 (11 111¢) + the tournament delta — the
+    // old code added the raw 1 000 000 kopeks as if they were cents ($10 000)
+    expect(entry?.amount).toBe(11_111 + target)
+    expect(reconcile.sessionProfitUsd).toBe(target)
+    expect(reconcile.remainderUsd ?? 1_000_000).toBeLessThan(5)
+    expect(reconcile.flagged).toBe(false)
+  })
+
+  it('adjusts an EUR room against a USD snapshot: inverse rates are applied at amount level', () => {
+    // only EUR→USD (1.1) is known for the day: 100.00 USD → €90.91
+    upsertBalance(redstar, '2026-09-09', 100_00, 'USD')
+    upsertBalance(redstar, '2026-09-10', 100_00, 'EUR')
+    replaceDayTournaments(redstar, '2026-09-10', [{ buyin: 50_00, result: 50_00, currency: 'EUR' }])
+
+    const reconcile = adjustBalanceToTournaments(redstar, '2026-09-10')
+
+    // nothing to explain on the day, so the adjusted balance IS the previous
+    // balance converted into the entry currency
+    const entry = getBalance(redstar, '2026-09-10')
+    expect(entry?.currency).toBe('EUR')
+    expect(entry?.amount).toBe(9091)
+    expect(reconcile.remainderUsd ?? 1_000_000).toBeLessThan(5)
+    expect(reconcile.flagged).toBe(false)
+  })
+
   it('writes the leftover off to casino and clears the flag', () => {
     upsertBalance(pokerdon, '2026-09-09', 100_00, 'USD')
     upsertBalance(pokerdon, '2026-09-10', 140_00, 'USD')
@@ -196,6 +232,20 @@ describe('tournaments', () => {
     const flag = reconcileSummary('2026-09-10', '2026-09-10').find((f) => f.roomId === pokerdon)
     expect(flag?.tournamentCount).toBe(2)
     expect(flag?.flagged).toBe(false)
+  })
+
+  it('reconcileSummary scans every day of a range crossing a DST fallback', () => {
+    // Europe/Berlin falls back on 2026-10-25: a fixed 24h step from local
+    // midnight repeats 10-25 and never reaches 10-28, silently losing its flag
+    const dates = ['2026-10-24', '2026-10-25', '2026-10-26', '2026-10-27', '2026-10-28']
+    let balance = 100_00
+    for (const date of dates) {
+      upsertBalance(pokerdon, date, balance, 'USD')
+      balance += 100_00
+    }
+
+    const flags = reconcileSummary('2026-10-24', '2026-10-28')
+    expect(flags.map((f) => f.date)).toEqual(dates)
   })
 
   it('editing a past day uses that day frozen rate even when newer rates exist', () => {

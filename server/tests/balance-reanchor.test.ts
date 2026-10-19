@@ -145,7 +145,7 @@ describe('Re-anchor balance to import dates on save', () => {
     expect(balanceRow('2026-09-20')).toEqual({ amount: 800_00, source: 'manual' })
   })
 
-  it('leaves the «Списать на казино» flow on its original behaviour (casino row blocks the move)', async () => {
+  it('leaves the «Списать на казино» flow on its original behaviour: a write-off never re-dates the balance', async () => {
     upsertBalance(room, '2026-09-10', 1000_00, 'USD')
     upsertBalance(room, '2026-09-20', 1200_00, 'USD')
 

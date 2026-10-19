@@ -250,13 +250,81 @@ describe('Bulk pipeline: balance and tournaments first, write-off last, all in o
     expect(casinoRows(room, '2026-09-10')).toEqual([
       { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: expect.stringContaining('Авто-списание') }
     ])
-    // the write-off row itself blocks re-anchoring: «Списать» never moves the balance
+    // «Списать» pins the balance to the day it closes: the re-anchor is refused
+    // when it would pull the snapshot onto a different (imported) day
     expect(balanceOf(room, '2026-09-10')).toBe(300_00)
     expect((bulk.json() as { reanchored: { from: string; to: string } | null }).reanchored).toBeNull()
 
     const closed = (bulk.json() as { reconcile: Reconcile }).reconcile
     expect(closed.remainderUsd).toBe(0)
     expect(await discrepancies()).toEqual([])
+  })
+
+  it('a batch saved a day late still closes: the re-anchor makes the day manual before the write-off', async () => {
+    // the balance was recorded on 09-12 (the form always writes "today"), the games were played on 09-10
+    seedLedger(room, ['2026-09-08', '2026-09-12'])
+
+    const bulk = await saveWithWriteoff(room, '2026-09-10', [ggImport('2026-09-10', 313_666_557, 100_00, 100_00)])
+    expect(bulk.statusCode).toBe(200)
+
+    // the snapshot landed on the play day first …
+    expect((bulk.json() as { reanchored: { from: string; to: string } | null }).reanchored).toEqual({
+      from: '2026-09-12',
+      to: '2026-09-10'
+    })
+    expect(balanceOf(room, '2026-09-10')).toBe(300_00)
+    expect(balanceOf(room, '2026-09-12')).toBeUndefined()
+
+    // … so the write-off had a real measurement to reconcile against
+    expect(casinoRows(room, '2026-09-10')).toEqual([
+      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: expect.stringContaining('Авто-списание') }
+    ])
+    expect((bulk.json() as { reconcile: Reconcile }).reconcile).toMatchObject({ remainderUsd: 0, flagged: false })
+    expect(await reconcile('2026-09-10')).toMatchObject({ remainderUsd: 0, flagged: false })
+    expect(await discrepancies()).toEqual([])
+  })
+
+  it('the closing row is immutable: no edit or delete through the transactions API', async () => {
+    seedLedger(room)
+    const bulk = await saveWithWriteoff(room, '2026-09-10', [ggImport('2026-09-10', 313_666_558, 100_00, 100_00)])
+    expect(bulk.statusCode).toBe(200)
+
+    const row = getDb().prepare('SELECT id, writeoff FROM transactions WHERE room_id = ? AND writeoff = 1').get(room) as {
+      id: number
+      writeoff: number
+    }
+    expect(row.writeoff).toBe(1)
+
+    // the flag travels to the client, which renders a badge instead of edit controls
+    const listed = await app.inject({ method: 'GET', url: `/api/transactions?type=casino&roomId=${room}` })
+    const [apiRow] = (listed.json() as { transactions: { id: number; writeoff: boolean }[] }).transactions
+    expect(apiRow).toMatchObject({ id: row.id, writeoff: true })
+
+    const del = await app.inject({ method: 'DELETE', url: `/api/transactions/${row.id}` })
+    expect(del.statusCode).toBe(400)
+    expect(del.body).toContain('системное списание')
+
+    const edit = await app.inject({
+      method: 'PUT',
+      url: `/api/transactions/${row.id}`,
+      payload: { roomId: room, type: 'casino', amount: 1_00, currency: 'USD', date: '2026-09-10' }
+    })
+    expect(edit.statusCode).toBe(400)
+    expect(edit.body).toContain('системное списание')
+
+    // the snapshot the row documents is untouched and the day stays closed
+    expect(balanceOf(room, '2026-09-10')).toBe(300_00)
+    expect(await reconcile('2026-09-10')).toMatchObject({ remainderUsd: 0, flagged: false })
+
+    // an ordinary casino row the user entered stays fully editable
+    const own = await app.inject({
+      method: 'POST',
+      url: '/api/transactions',
+      payload: { roomId: room, type: 'casino', amount: 50_00, currency: 'USD', direction: 'in', date: '2026-09-10', comment: 'свой выигрыш' }
+    })
+    expect(own.statusCode).toBe(200)
+    const ownId = (getDb().prepare("SELECT id FROM transactions WHERE room_id = ? AND writeoff = 0 AND comment = 'свой выигрыш'").get(room) as { id: number }).id
+    expect((await app.inject({ method: 'DELETE', url: `/api/transactions/${ownId}` })).statusCode).toBe(200)
   })
 
   it('write-off still works after a previous save re-anchored the balance onto the play day', async () => {
