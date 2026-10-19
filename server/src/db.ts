@@ -535,6 +535,18 @@ const MIGRATIONS: string[] = [
   ALTER TABLE transactions ADD COLUMN writeoff INTEGER NOT NULL DEFAULT 0;
   UPDATE transactions SET writeoff = 1 WHERE type = 'casino' AND comment LIKE 'Авто-списание:%';
   `,
+  // v31: a day-closing write-off records WHY the residual was attributed. The
+  // ledger row itself stays an ordinary casino transaction — `type` is the
+  // accounting shape (signed gaming P&L, kept out of external flows) — while
+  // `writeoff_reason` is the human label the popup asks for: 'casino',
+  // 'fx' (exchange-rate drift) or 'other'. The badge in «Транзакции» and the
+  // popup name what actually happened instead of calling every residual a
+  // casino game. Old write-offs meant casino — that is what they are backfilled
+  // with; a user-entered casino row keeps NULL.
+  `
+  ALTER TABLE transactions ADD COLUMN writeoff_reason TEXT;
+  UPDATE transactions SET writeoff_reason = 'casino' WHERE writeoff = 1;
+  `,
 ]
 
 let dbInstance: DatabaseSync | undefined

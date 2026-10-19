@@ -53,11 +53,14 @@ interface CasinoRow {
   currency: string
   direction: string
   comment: string | null
+  writeoff_reason: string | null
 }
 
 function casinoRows(roomId: number, date: string): CasinoRow[] {
   return getDb()
-    .prepare("SELECT amount, fee, currency, direction, comment FROM transactions WHERE room_id = ? AND date = ? AND type = 'casino' ORDER BY id")
+    .prepare(
+      "SELECT amount, fee, currency, direction, comment, writeoff_reason FROM transactions WHERE room_id = ? AND date = ? AND type = 'casino' ORDER BY id"
+    )
     .all(roomId, date) as unknown as CasinoRow[]
 }
 
@@ -78,15 +81,20 @@ function seedLedger(roomId: number, days: string[] = ['2026-09-08', '2026-09-10'
   upsertBalance(roomId, days[1] as string, 300_00, 'USD')
 }
 
-async function saveWithWriteoff(roomId: number, date: string, imports: ReturnType<typeof ggImport>[]) {
+async function saveWithWriteoff(
+  roomId: number,
+  date: string,
+  imports: ReturnType<typeof ggImport>[],
+  writeoffReason?: string
+) {
   return app.inject({
     method: 'POST',
     url: '/api/tournaments/bulk',
-    payload: { roomId, date, lines: [], imports, writeoffCasino: true }
+    payload: { roomId, date, lines: [], imports, writeoff: true, writeoffReason }
   })
 }
 
-describe('Import flow write-off: «Списать на казино» from the tournament popup', () => {
+describe('Import flow write-off: closing the day from the tournament popup', () => {
   it('closes the modal day in the very same request that saves the import', async () => {
     seedLedger(room)
 
@@ -116,7 +124,7 @@ describe('Import flow write-off: «Списать на казино» from the t
 
     // … together with the casino row, pinned to the residual the ledger left over
     expect(casinoRows(room, '2026-09-10')).toEqual([
-      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: expect.stringContaining('Авто-списание') }
+      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: expect.stringContaining('Авто-списание'), writeoff_reason: 'casino' }
     ])
     // the manual snapshot already measures that 200.00 and stays untouched
     expect(balanceOf(room, '2026-09-10')).toBe(300_00)
@@ -194,7 +202,7 @@ describe('Import flow write-off: «Списать на казино» from the t
 })
 
 describe('Bulk pipeline: balance and tournaments first, write-off last, all in one request', () => {
-  it('books the casino row through the public API: deposit + balances + preview + one bulk with writeoffCasino', async () => {
+  it('books the casino row through the public API: deposit + balances + preview + one bulk with a write-off', async () => {
     // the way the UI does it: a deposit on the Транзакции tab …
     const dep = await app.inject({
       method: 'POST',
@@ -220,11 +228,11 @@ describe('Bulk pipeline: balance and tournaments first, write-off last, all in o
     expect(flagged.flagged).toBe(true)
     expect(flagged.remainderUsd).toBe(200_00)
 
-    // … and «Списать на казино» saves the import and books the write-off in one request
+    // … and the write-off choice saves the import and books the closing row in one request
     const bulk = await saveWithWriteoff(room, '2026-09-10', [ggImport('2026-09-10', 313_666_551, 100_00, 100_00)])
     expect(bulk.statusCode).toBe(200)
     expect(casinoRows(room, '2026-09-10')).toEqual([
-      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: expect.stringContaining('Авто-списание') }
+      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: expect.stringContaining('Авто-списание'), writeoff_reason: 'casino' }
     ])
     expect(balanceOf(room, '2026-09-10')).toBe(300_00)
     const closed = (bulk.json() as { reconcile: Reconcile }).reconcile
@@ -248,7 +256,7 @@ describe('Bulk pipeline: balance and tournaments first, write-off last, all in o
 
     // no tournaments on the modal day → the whole session surplus is written off there
     expect(casinoRows(room, '2026-09-10')).toEqual([
-      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: expect.stringContaining('Авто-списание') }
+      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: expect.stringContaining('Авто-списание'), writeoff_reason: 'casino' }
     ])
     // «Списать» pins the balance to the day it closes: the re-anchor is refused
     // when it would pull the snapshot onto a different (imported) day
@@ -277,7 +285,7 @@ describe('Bulk pipeline: balance and tournaments first, write-off last, all in o
 
     // … so the write-off had a real measurement to reconcile against
     expect(casinoRows(room, '2026-09-10')).toEqual([
-      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: expect.stringContaining('Авто-списание') }
+      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: expect.stringContaining('Авто-списание'), writeoff_reason: 'casino' }
     ])
     expect((bulk.json() as { reconcile: Reconcile }).reconcile).toMatchObject({ remainderUsd: 0, flagged: false })
     expect(await reconcile('2026-09-10')).toMatchObject({ remainderUsd: 0, flagged: false })
@@ -297,8 +305,8 @@ describe('Bulk pipeline: balance and tournaments first, write-off last, all in o
 
     // the flag travels to the client, which renders a badge instead of edit controls
     const listed = await app.inject({ method: 'GET', url: `/api/transactions?type=casino&roomId=${room}` })
-    const [apiRow] = (listed.json() as { transactions: { id: number; writeoff: boolean }[] }).transactions
-    expect(apiRow).toMatchObject({ id: row.id, writeoff: true })
+    const [apiRow] = (listed.json() as { transactions: { id: number; writeoff: boolean; writeoffReason: string | null }[] }).transactions
+    expect(apiRow).toMatchObject({ id: row.id, writeoff: true, writeoffReason: 'casino' })
 
     const del = await app.inject({ method: 'DELETE', url: `/api/transactions/${row.id}` })
     expect(del.statusCode).toBe(400)
@@ -353,11 +361,86 @@ describe('Bulk pipeline: balance and tournaments first, write-off last, all in o
     const bulk = await saveWithWriteoff(room, '2026-09-10', [ggImport('2026-09-10', 313_666_554, 100_00, 100_00)])
     expect(bulk.statusCode).toBe(200)
     expect(casinoRows(room, '2026-09-10')).toEqual([
-      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: expect.stringContaining('Авто-списание') }
+      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: expect.stringContaining('Авто-списание'), writeoff_reason: 'casino' }
     ])
     expect((bulk.json() as { reanchored: { from: string; to: string } | null }).reanchored).toBeNull()
     expect(balanceOf(room, '2026-09-10')).toBe(300_00)
     expect(await reconcile('2026-09-10')).toMatchObject({ remainderUsd: 0, flagged: false })
     expect(await discrepancies()).toEqual([])
+  })
+})
+
+describe('Write-off reason: why the day was closed', () => {
+  it('persists the popup choice in the row and in its self-written comment', async () => {
+    seedLedger(room)
+
+    const bulk = await saveWithWriteoff(room, '2026-09-10', [ggImport('2026-09-10', 313_666_560, 100_00, 100_00)], 'fx')
+    expect(bulk.statusCode).toBe(200)
+    expect(casinoRows(room, '2026-09-10')).toEqual([
+      {
+        amount: 200_00,
+        fee: 0,
+        currency: 'USD',
+        direction: 'in',
+        comment: 'Авто-списание: остаток дня — разница курсов (2026-09-10)',
+        writeoff_reason: 'fx'
+      }
+    ])
+  })
+
+  it('rejects a reason outside the allowlist and rolls the whole batch back', async () => {
+    seedLedger(room)
+
+    const bulk = await saveWithWriteoff(room, '2026-09-10', [ggImport('2026-09-10', 313_666_561, 100_00, 100_00)], 'weather')
+    expect(bulk.statusCode).toBe(400)
+    expect(bulk.body).toContain('reason')
+    expect((getDb().prepare('SELECT COUNT(*) AS c FROM tournaments WHERE room_id = ?').get(room) as { c: number }).c).toBe(0)
+    expect(casinoRows(room, '2026-09-10')).toEqual([])
+  })
+
+  it('carries the reason through the standalone write-off and the Транзакции button', async () => {
+    seedLedger(room)
+    const standalone = await app.inject({
+      method: 'POST',
+      url: '/api/tournaments/writeoff',
+      payload: { roomId: room, date: '2026-09-10', reason: 'other' }
+    })
+    expect(standalone.statusCode).toBe(200)
+    expect(casinoRows(room, '2026-09-10')).toEqual([
+      {
+        amount: 200_00,
+        fee: 0,
+        currency: 'USD',
+        direction: 'in',
+        comment: 'Авто-списание: остаток дня — прочее (2026-09-10)',
+        writeoff_reason: 'other'
+      }
+    ])
+
+    // the discrepancy button keeps the user's own comment and takes its reason too
+    const other = createRoom({ name: 'RedStar', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    seedLedger(other)
+    const tab = await app.inject({
+      method: 'POST',
+      url: '/api/transactions/writeoff-discrepancy',
+      payload: { roomId: other, date: '2026-09-10', comment: 'ошибка ввода', reason: 'fx' }
+    })
+    expect(tab.statusCode).toBe(200)
+    expect(casinoRows(other, '2026-09-10')).toEqual([
+      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: 'ошибка ввода', writeoff_reason: 'fx' }
+    ])
+
+    // an omitted reason falls back to casino — the pre-reason behaviour
+    const third = createRoom({ name: 'GGpoker3', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    seedLedger(third)
+    const fallback = await app.inject({
+      method: 'POST',
+      url: '/api/transactions/writeoff-discrepancy',
+      payload: { roomId: third, date: '2026-09-10', comment: 'баланс поправил' }
+    })
+    expect(fallback.statusCode).toBe(200)
+    expect(casinoRows(third, '2026-09-10')).toEqual([
+      { amount: 200_00, fee: 0, currency: 'USD', direction: 'in', comment: 'баланс поправил', writeoff_reason: 'casino' }
+    ])
   })
 })

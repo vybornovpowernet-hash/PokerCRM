@@ -145,11 +145,11 @@ describe('Re-anchor balance to import dates on save', () => {
     expect(balanceRow('2026-09-20')).toEqual({ amount: 800_00, source: 'manual' })
   })
 
-  it('leaves the «Списать на казино» flow on its original behaviour: a write-off never re-dates the balance', async () => {
+  it('leaves the write-off flow on its original behaviour: a write-off never re-dates the balance', async () => {
     upsertBalance(room, '2026-09-10', 1000_00, 'USD')
     upsertBalance(room, '2026-09-20', 1200_00, 'USD')
 
-    const res = await save({ date: '2026-09-20', lines: [], imports: [ggImport('2026-09-15', 506)], writeoffCasino: true })
+    const res = await save({ date: '2026-09-20', lines: [], imports: [ggImport('2026-09-15', 506)], writeoff: true })
     expect(res.statusCode).toBe(200)
     expect((res.json() as { reanchored: Reanchored | null }).reanchored).toBeNull()
 

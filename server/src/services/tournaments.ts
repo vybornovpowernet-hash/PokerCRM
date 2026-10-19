@@ -4,6 +4,7 @@ import { isValidDayKey, addDays } from '../lib/date.js'
 import { getRoom, validateCurrency } from './rooms.js'
 import { getBalance, getBalanceBefore, listForDate, upsertBalance, recomputeRoomBalances } from './balances.js'
 import { recordCasinoPnl } from './funds.js'
+import type { WriteoffReason } from './funds.js'
 import { computeRoomProfit, sessionRoomProfit } from './sessions.js'
 import type { RoomProfit } from './sessions.js'
 import { convertCross, convertToUsd, withRateCache } from './rates/convert.js'
@@ -333,7 +334,7 @@ function casinoTransactionsUsd(roomId: number, date: string): number {
  *
  * `R = S − T − X` is plain ledger arithmetic with no special cases: closing a
  * day adds an ordinary casino transaction of exactly `R` (see
- * `applyCasinoWriteoff`), and any later change to the ledger — a retrospective
+ * `applyWriteoff`), and any later change to the ledger — a retrospective
  * tournament import, a balance correction on this or another day — re-opens the
  * day with the part nothing explains. A write-off is a judgement about the data
  * of the day, and the ledger keeps it re-examinable instead of pinning it away.
@@ -482,9 +483,10 @@ export function previewDayReconcile(
  * falls back to `reconcilePendingImports`, which keeps/re-derives the marker
  * from the newest manual balance day.
  *
- * `options.writeoffCasino` rides along with the save: the popup's «Списать на
- * казино» closes the modal day through the very same core the Транзакции tab
- * uses, in this transaction. That is what makes the button atomic — the import
+ * `options.writeoff` rides along with the save: the popup's write-off choice
+ * closes the modal day through the very same core the Транзакции tab uses, in
+ * this transaction (`options.writeoffReason` names why — casino / rate drift /
+ * other). That is what makes the button atomic — the import
  * and the closing casino transaction land together or not at all, and the
  * returned reconciles already describe the closed day (no second round-trip).
  * The re-anchor runs BEFORE the write-off: a batch saved a day late leaves the
@@ -538,7 +540,7 @@ export function saveDayBatch(
   lines: TournamentLineInput[],
   imports: TournamentImportInput[] = [],
   removedImportIds: number[] = [],
-  options: { writeoffCasino?: boolean } = {}
+  options: { writeoff?: boolean; writeoffReason?: WriteoffReason } = {}
 ): { rows: TournamentRow[]; reconciles: DayReconcile[]; reanchored: { from: string; to: string } | null } {
   if (!isValidDayKey(modalDate)) throw new HttpError(400, 'date: must be a valid YYYY-MM-DD day')
   const room = getRoom(roomId)
@@ -601,10 +603,11 @@ export function saveDayBatch(
     if (deduped.length > 0) {
       const batchDates = deduped.map((r) => r.date)
       if (cleaned.length > 0) batchDates.push(modalDate)
-      reanchored = reanchorBalanceToBatch(roomId, batchDates, options.writeoffCasino ? modalDate : undefined)
+      reanchored = reanchorBalanceToBatch(roomId, batchDates, options.writeoff ? modalDate : undefined)
     }
-    if (options.writeoffCasino) {
-      applyCasinoWriteoff(roomId, modalDate, `Авто-списание: баланс за день относится к казино (${modalDate})`)
+    if (options.writeoff) {
+      const reason = options.writeoffReason ?? 'casino'
+      applyWriteoff(roomId, modalDate, reason, writeoffComment(reason, modalDate))
     }
     return reanchored
   })
@@ -657,10 +660,10 @@ function getBalanceRow(roomId: number, date: string): { amount: number; currency
 
 /**
  * The single write-off implementation behind every way of closing a day: the
- * «Списать на казино» button of the import popup, the `writeoffCasino` flag of
- * a save batch (the popup rides on it, so "save the import + close the day" is
- * one atomic step) and the «Списать» button of the Депозиты и выводы tab. All
- * of them write the very same thing, only the comment differs.
+ * write-off choice of the import popup, the `writeoff` flag of a save batch (the
+ * popup rides on it, so "save the import + close the day" is one atomic step)
+ * and the «Списать» button of the Депозиты и выводы tab. All of them write the
+ * very same thing, only the comment and the `reason` differ.
  *
  * The whole leftover (session − tournaments − casino) becomes an ordinary
  * `casino` transaction of that exact amount in USD — the ledger itself, not a
@@ -669,6 +672,8 @@ function getBalanceRow(roomId: number, date: string): { amount: number; currency
  * already measured, and that snapshot already contains the delta being
  * attributed (a normal casino transaction *does* move it, see `createTransaction`
  * — which is exactly why it can never close a day: `R` would stay unchanged).
+ * `reason` is metadata on that row: whether the residual looked like casino
+ * play, exchange-rate drift or something else. It never changes the arithmetic.
  *
  * Consequences of the ledger being honest: a day with nothing left to explain
  * writes no row (pressing the button again is a no-op and never overwrites a
@@ -681,7 +686,7 @@ function getBalanceRow(roomId: number, date: string): { amount: number; currency
  * (no balance of its own / no rate) throws and takes the whole batch with it —
  * saving an import the user wanted reconciled is never the better half.
  */
-function applyCasinoWriteoff(roomId: number, date: string, comment: string): DayReconcile {
+function applyWriteoff(roomId: number, date: string, reason: WriteoffReason, comment: string): DayReconcile {
   // read AFTER the caller's writes: `saveDayBatch` persists tournaments and
   // re-anchors the balance, then calls this inside the same transaction, so `S`
   // is the real snapshot and `T` is already the imported total
@@ -691,31 +696,37 @@ function applyCasinoWriteoff(roomId: number, date: string, comment: string): Day
     throw new HttpError(400, reconcile.blank ?? 'Cannot write off: missing conversion data')
   }
   if (amount === 0) return reconcile
-  recordCasinoPnl({ roomId, type: 'casino', amount, currency: 'USD', date, comment })
+  recordCasinoPnl({ roomId, type: 'casino', amount, currency: 'USD', date, comment }, reason)
   return reconcileDay(roomId, date)
 }
 
+/** The system comment a write-off writes itself when the user gives none. */
+function writeoffComment(reason: WriteoffReason, date: string): string {
+  if (reason === 'fx') return `Авто-списание: остаток дня — разница курсов (${date})`
+  if (reason === 'other') return `Авто-списание: остаток дня — прочее (${date})`
+  return `Авто-списание: баланс за день относится к казино (${date})`
+}
+
 /**
- * «Списать на казино» of the import popup as a standalone call — the same core
- * the save batch uses, with a self-written reason.
+ * The write-off of the import popup as a standalone call — the same core the
+ * save batch uses, with a self-written comment.
  */
-export function writeoffCasinoRemainder(roomId: number, date: string): DayReconcile {
-  const comment = `Авто-списание: баланс за день относится к казино (${date})`
-  return withTransaction(() => applyCasinoWriteoff(roomId, date, comment))
+export function writeoffRemainder(roomId: number, date: string, reason: WriteoffReason = 'casino'): DayReconcile {
+  return withTransaction(() => applyWriteoff(roomId, date, reason, writeoffComment(reason, date)))
 }
 
 /**
  * "Списать" from the Депозиты и выводы tab: attribute an orphaned discrepancy
- * to casino games with a user-provided comment. A non-empty comment is
- * mandatory — the write-off is a deliberate judgement call. Same core as
- * `writeoffCasinoRemainder`: an ordinary casino transaction of the whole
- * remainder, written as its own row so an earlier decision is never rewritten.
+ * with a user-provided comment and reason. A non-empty comment is mandatory —
+ * the write-off is a deliberate judgement call. Same core as
+ * `writeoffRemainder`: an ordinary casino transaction of the whole remainder,
+ * written as its own row so an earlier decision is never rewritten.
  */
-export function writeoffDiscrepancy(roomId: number, date: string, comment: string): DayReconcile {
+export function writeoffDiscrepancy(roomId: number, date: string, comment: string, reason: WriteoffReason = 'casino'): DayReconcile {
   getRoom(roomId)
   if (!isValidDayKey(date)) throw new HttpError(400, 'date: must be a valid YYYY-MM-DD day')
   const text = typeof comment === 'string' ? comment.trim() : ''
   if (!text) throw new HttpError(400, 'comment: обязательно укажите причину списания')
   if (text.length > 500) throw new HttpError(400, 'comment: не более 500 символов')
-  return withTransaction(() => applyCasinoWriteoff(roomId, date, text))
+  return withTransaction(() => applyWriteoff(roomId, date, reason, text))
 }

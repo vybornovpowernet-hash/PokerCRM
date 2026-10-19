@@ -403,7 +403,7 @@ describe('A write-off is an honest casino row, not a plug', () => {
     expect(balanceOf()).toBe(300_00)
 
     // a repeat press writes no row and overwrites no comment
-    const again = await app.inject({ method: 'POST', url: '/api/tournaments/writeoff-casino', payload: { roomId: room, date: DATE } })
+    const again = await app.inject({ method: 'POST', url: '/api/tournaments/writeoff', payload: { roomId: room, date: DATE } })
     expect(again.statusCode).toBe(200)
     expect((again.json() as { reconcile: Reconcile }).reconcile.remainderUsd).toBe(0)
     expect(casinoAmounts()).toEqual([-20_00, 76_00])
@@ -492,7 +492,7 @@ describe('auto-interpolated balance: no phantom discrepancy', () => {
     expect(day).toMatchObject({ flagged: false, remainderUsd: null, tournamentCount: 1 })
 
     // «Списать» on a day that was never measured is refused, not silently faked
-    const writeoff = await app.inject({ method: 'POST', url: '/api/tournaments/writeoff-casino', payload: { roomId, date: DATE } })
+    const writeoff = await app.inject({ method: 'POST', url: '/api/tournaments/writeoff', payload: { roomId, date: DATE } })
     expect(writeoff.statusCode).toBe(400)
     expect((writeoff.json() as { error: string }).error).toMatch(/ручного баланса/)
     const casinoRows = getDb()

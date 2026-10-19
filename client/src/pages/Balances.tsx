@@ -3,7 +3,7 @@ import { api } from '../lib/api'
 import { formatAmount, formatUnits, parseUnits } from '../lib/money'
 import { emitBalancesChanged, onBalancesChanged } from '../lib/events'
 import { TournamentPopup } from '../components/TournamentPopup'
-import type { CurrentBalances, Room } from '../lib/types'
+import type { CurrentBalances, RateInfo, Room } from '../lib/types'
 
 const TODAY = new Date().toISOString().slice(0, 10)
 
@@ -23,6 +23,26 @@ function formatThousands(value: string): string {
 
 const inputCls =
   'rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-sm text-slate-100 shadow-inner outline-none transition focus:border-slate-500'
+
+/** One feed: its latest known rate, the day it belongs to, and its own freshness. */
+function RateLine({ label, feed }: { label: string; feed?: RateInfo }) {
+  // a feed with no rate was never fetched: "no data" is not the same as "stale"
+  const state = feed?.rate == null ? 'unknown' : feed.stale ? 'stale' : 'fresh'
+  const dot = state === 'unknown' ? 'bg-slate-600' : state === 'stale' ? 'bg-amber-400' : 'bg-emerald-500'
+  const status = state === 'unknown' ? 'нет данных' : state === 'stale' ? 'устарел' : 'актуально'
+  return (
+    <div className="flex items-baseline justify-between gap-2 text-slate-200">
+      <span className="flex items-baseline gap-1.5">
+        <span className="text-slate-500">{label}</span>
+        {feed?.date && <span className="text-[11px] text-slate-600">{feed.date}</span>}
+      </span>
+      <span className="flex items-baseline gap-2">
+        <span className="tabular-nums">{feed?.rate != null ? feed.rate.toFixed(4) : '—'}</span>
+        <span role="img" aria-label={status} title={`Курс ${status}`} className={`inline-block h-1.5 w-1.5 rounded-full ${dot}`} />
+      </span>
+    </div>
+  )
+}
 
 export default function BalancesPage() {
   const [rooms, setRooms] = useState<Room[]>([])
@@ -98,18 +118,15 @@ export default function BalancesPage() {
         <div className="rounded-xl border border-slate-700 bg-slate-800/80 p-5 shadow-lg shadow-black/40">
           <div className="text-xs uppercase tracking-wider text-slate-500">Курсы</div>
           <div className="mt-1 space-y-1 text-sm">
-            <div className="flex justify-between text-slate-200">
-              <span className="text-slate-500">USD/RUB</span>
-              <span className="tabular-nums">{data?.rates.usdRub ? data.rates.usdRub.rate.toFixed(4) : '—'}</span>
-            </div>
-            <div className="flex justify-between text-slate-200">
-              <span className="text-slate-500">EUR/USD</span>
-              <span className="tabular-nums">{data?.rates.eurUsd ? data.rates.eurUsd.rate.toFixed(4) : '—'}</span>
-            </div>
-            <div className={`mt-1 flex justify-between text-xs ${data?.rates.stale ? 'text-amber-400' : 'text-emerald-500'}`}>
-              <span>статус</span>
-              <span>{data?.rates.stale ? 'устарел' : 'актуально'}</span>
-            </div>
+            <RateLine label="USD/RUB" feed={data?.rates.usdRub} />
+            <RateLine label="EUR/USD" feed={data?.rates.eurUsd} />
+            <RateLine label="USD/CNY" feed={data?.rates.cnyUsd} />
+            {data && (
+              <div className={`mt-1 flex justify-between text-xs ${data.rates.stale ? 'text-amber-400' : 'text-emerald-500'}`}>
+                <span>статус</span>
+                <span>{data.rates.stale ? 'часть курсов устарела' : 'актуально'}</span>
+              </div>
+            )}
           </div>
         </div>
       </div>

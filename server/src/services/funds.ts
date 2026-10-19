@@ -9,8 +9,26 @@ import type { Room } from './rooms.js'
 export type TransactionType = 'deposit' | 'withdraw' | 'transfer' | 'casino'
 export type Direction = 'in' | 'out'
 
+/**
+ * Why a day-closing write-off attributed a residual. The ledger row is always a
+ * casino transaction (`type` is the accounting shape: signed gaming P&L kept out
+ * of external flows) — this is the human label the popup asks for, so the UI can
+ * name what actually happened instead of calling every residual a casino game.
+ */
+export type WriteoffReason = 'casino' | 'fx' | 'other'
+
+export const WRITEOFF_REASONS: readonly WriteoffReason[] = ['casino', 'fx', 'other']
+
 const TRANSACTION_TYPES: TransactionType[] = ['deposit', 'withdraw', 'transfer', 'casino']
 const DIRECTIONS: Direction[] = ['in', 'out']
+
+export function validateWriteoffReason(value: unknown): WriteoffReason {
+  if (value === undefined || value === null) return 'casino'
+  if (typeof value !== 'string' || !WRITEOFF_REASONS.includes(value as WriteoffReason)) {
+    throw new HttpError(400, `reason: ожидается одно из ${WRITEOFF_REASONS.join(', ')}`)
+  }
+  return value as WriteoffReason
+}
 
 export interface Transaction {
   id: number
@@ -30,6 +48,8 @@ export interface Transaction {
   amountUsd: number | null
   /** System day-closing write-off (`recordCasinoPnl`): immutable. */
   writeoff: boolean
+  /** Why the write-off was made; null for every user-entered transaction. */
+  writeoffReason: WriteoffReason | null
 }
 
 interface TxRow {
@@ -46,6 +66,7 @@ interface TxRow {
   comment: string | null
   created_at: string
   writeoff: number
+  writeoff_reason: WriteoffReason | null
   room_name: string
   destination_room_name: string | null
 }
@@ -95,6 +116,7 @@ function mapRow(r: TxRow): Transaction {
     comment: r.comment,
     createdAt: r.created_at,
     writeoff: r.writeoff === 1,
+    writeoffReason: r.writeoff_reason,
     amountUsd: convertToUsd(r.amount, r.currency, r.date, r.room_id)
   }
 }
@@ -262,24 +284,25 @@ export function createTransaction(raw: TransactionInput): Transaction {
  * `createTransaction` applies a transaction to the manual balance of its own day
  * (`applyBalanceLegs`): that emulates the user re-entering the balance after the
  * operation. A reconciliation write-off is the opposite case — it attributes a
- * delta the user has already measured (see `applyCasinoWriteoff`) — so applying
+ * delta the user has already measured (see `applyWriteoff`) — so applying
  * it would move the balance a second time and leave the day exactly as far from
  * reconciled. Hence no balance legs and no recompute: the row is pure P&L on a
  * day whose snapshot already contains it. The symmetry holds both ways: the row
  * carries `writeoff = 1` and is immutable afterwards (`assertMutable`) —
  * applying legs on edit/delete would move the snapshot it only documents.
  */
-export function recordCasinoPnl(raw: TransactionInput): Transaction {
+export function recordCasinoPnl(raw: TransactionInput, reason: WriteoffReason): Transaction {
   if (raw.type !== 'casino') throw new HttpError(400, 'recordCasinoPnl: type must be casino')
   const v = validateTransaction(raw)
   const comment = validateString(raw.comment, 'comment', 500)
+  const writeoffReason = validateWriteoffReason(reason)
   return withTransaction(() => {
     const info = getDb()
       .prepare(
-        `INSERT INTO transactions (room_id, type, amount, fee, currency, direction, comment, date, writeoff)
-         VALUES (?, 'casino', ?, 0, ?, ?, ?, ?, 1)`
+        `INSERT INTO transactions (room_id, type, amount, fee, currency, direction, comment, date, writeoff, writeoff_reason)
+         VALUES (?, 'casino', ?, 0, ?, ?, ?, ?, 1, ?)`
       )
-      .run(v.room.id, v.amount, v.currency, v.direction, comment, raw.date)
+      .run(v.room.id, v.amount, v.currency, v.direction, comment, raw.date, writeoffReason)
     return getTransaction(Number(info.lastInsertRowid))
   })
 }

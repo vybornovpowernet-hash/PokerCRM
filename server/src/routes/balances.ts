@@ -40,7 +40,7 @@ export async function balancesRoutes(app: FastifyInstance): Promise<void> {
     return {
       balances: rows,
       totalUsd,
-      rates: { stale: rates.stale, usdRub: rates.usdRub, eurUsd: rates.eurUsd }
+      rates: { stale: rates.stale, usdRub: rates.usdRub, eurUsd: rates.eurUsd, cnyUsd: rates.cnyUsd }
     }
   })
 }

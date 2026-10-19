@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { formatAmount, formatUnits, parseUnits } from '../lib/money'
 import { detectRoomTemplate } from '../lib/templates'
-import type { DayReconcile, Room, TournamentImportEntry, TournamentImportFailure, TournamentLineInput, TournamentRow } from '../lib/types'
+import type { DayReconcile, Room, TournamentImportEntry, TournamentImportFailure, TournamentLineInput, TournamentRow, WriteoffReason } from '../lib/types'
+import { WRITEOFF_REASON_HINTS, WRITEOFF_REASON_LABELS, WRITEOFF_REASONS } from '../lib/types'
 
 const inputCls = 'w-full rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-sm text-slate-100 shadow-inner outline-none transition focus:border-slate-500'
 const colCls = 'text-xs uppercase tracking-wider text-slate-500'
@@ -84,6 +85,7 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [importBusy, setImportBusy] = useState(false)
+  const [writeoffChoice, setWriteoffChoice] = useState(false)
   const busyRef = useRef(false)
   const mountedRef = useRef(true)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -111,6 +113,7 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
     setTextDraft('')
     setTextErrors([])
     setTextParsedCount(0)
+    setWriteoffChoice(false)
     setRows(Array.from({ length: NEW_ROWS_COUNT }, emptyRow))
     api.tournaments
       .list(room.id, date)
@@ -314,6 +317,7 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
       if (mountedRef.current) {
         setReconcile(res.reconcile)
         setWouldReanchor(res.wouldReanchor)
+        setWriteoffChoice(false)
       }
     } catch (e) {
       if (mountedRef.current) setError(e instanceof Error ? e.message : 'Preview failed')
@@ -342,18 +346,26 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
     }
   }
 
-  async function saveThen(action: 'adjust' | 'writeoff') {
+  async function saveThen(action: 'adjust' | 'writeoff', reason: WriteoffReason = 'casino') {
     if (busyRef.current) return
     busyRef.current = true
     setError(null)
     setBusy(true)
     try {
-      // «Списать на казино» rides along with the save: the server writes the
-      // closing casino transaction in the same transaction as the import, so a
+      // The write-off rides along with the save: the server books the closing
+      // casino row with its reason in the same transaction as the import, so a
       // day can never end up saved-but-open. Only the balance adjustment stays a
       // second call — it rewrites the balance and needs the saved tournaments.
-      const saved = await api.tournaments.save(roomId, date, collectLines(), imports, removedImportIds, action === 'writeoff')
+      const saved = await api.tournaments.save(
+        roomId,
+        date,
+        collectLines(),
+        imports,
+        removedImportIds,
+        action === 'writeoff' ? reason : null
+      )
       if (!mountedRef.current) return
+      setWriteoffChoice(false)
       // The server may have re-anchored the balance to the import's own dates —
       // «Поправить баланс» must follow it there, the modal day may be empty now.
       const res = action === 'adjust' ? await api.tournaments.adjustBalance(roomId, saved.reanchored?.to ?? date) : saved.reconcile
@@ -650,14 +662,33 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
                     Поправить баланс
                   </button>
                   <button
-                    onClick={() => saveThen('writeoff')}
+                    onClick={() => setWriteoffChoice((open) => !open)}
+                    aria-expanded={writeoffChoice}
+                    aria-haspopup="menu"
                     disabled={busy || importBusy || textBusy || importBlocked}
                     className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-200 transition hover:border-slate-500 disabled:opacity-40"
                   >
-                    Списать на казино
+                    Списать остаток…
                   </button>
                   <span className="self-center text-xs text-slate-500">или поправь строки и нажми «Проверить» снова</span>
                 </div>
+                {writeoffChoice && (
+                  <div role="menu" aria-label="Причина списания" className="overflow-hidden rounded-lg border border-slate-700 bg-slate-900/60">
+                    {WRITEOFF_REASONS.map((reason) => (
+                      <button
+                        key={reason}
+                        role="menuitem"
+                        aria-label={WRITEOFF_REASON_LABELS[reason]}
+                        onClick={() => saveThen('writeoff', reason)}
+                        disabled={busy}
+                        className="block w-full px-3 py-2 text-left transition hover:bg-slate-800/80 disabled:opacity-40"
+                      >
+                        <span className="block text-sm text-slate-100">{WRITEOFF_REASON_LABELS[reason]}</span>
+                        <span className="block text-xs text-slate-500">{WRITEOFF_REASON_HINTS[reason]}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : reconcile.blank ? (
               // no basis to compare (no balance / only an interpolated one / no rate) — say why instead of a green "сходится"

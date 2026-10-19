@@ -1,9 +1,13 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { Page } from 'playwright'
-import { afterEach, describe, expect, it } from 'vitest'
-import { defaultPlaywrightRoot, resolveBrowserCandidates, resolvePokerDomUrls, scrapeFromMirrors } from '../src/services/rates/pokerdon.js'
+import type { Browser, Page } from 'playwright'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { closeBrowser, defaultPlaywrightRoot, getBrowser, resolveBrowserCandidates, resolvePokerDomUrls, scrapeFromMirrors } from '../src/services/rates/pokerdon.js'
+
+const launch = vi.hoisted(() => vi.fn())
+
+vi.mock('playwright', () => ({ chromium: { launch } }))
 
 function tempDir(): string {
   return mkdtempSync(path.join(os.tmpdir(), 'pokerdon-test-'))
@@ -180,5 +184,72 @@ describe('scrapeFromMirrors', () => {
     await expect(scrapeFromMirrors(page, mirrors, log)).rejects.toThrow(/Все зеркала PokerDom недоступны \(3\)/)
     expect(visited).toEqual(mirrors)
     expect(lines).toHaveLength(3)
+  })
+})
+
+describe('getBrowser cache', () => {
+  interface FakeBrowser {
+    on: (event: string, cb: () => void) => void
+    close: () => Promise<void>
+  }
+
+  function fakeBrowser(handlers: (() => void)[] = []): FakeBrowser {
+    return {
+      on: (event, cb) => {
+        if (event === 'disconnected') handlers.push(cb)
+      },
+      close: async () => undefined
+    }
+  }
+
+  it('drops a disconnected Chromium so the next call launches a fresh one', async () => {
+    await closeBrowser()
+    launch.mockReset()
+
+    const disconnected: (() => void)[] = []
+    const alive = fakeBrowser(disconnected) as unknown as Browser
+    const replacement = fakeBrowser() as unknown as Browser
+    launch.mockResolvedValueOnce(alive).mockResolvedValueOnce(replacement)
+
+    expect(await getBrowser()).toBe(alive)
+    // a live browser is reused, not relaunched on every scrape
+    expect(await getBrowser()).toBe(alive)
+    expect(launch).toHaveBeenCalledTimes(1)
+
+    // a Chromium that died (OOM, killed, closed by hand) rejects every context
+    // from now on: the cached promise must be dropped, otherwise only a restart
+    // would heal the scraper
+    expect(disconnected).toHaveLength(1)
+    disconnected[0]?.()
+    expect(await getBrowser()).toBe(replacement)
+    expect(launch).toHaveBeenCalledTimes(2)
+
+    // closeBrowser releases the cache as well
+    await closeBrowser()
+    const third = fakeBrowser() as unknown as Browser
+    launch.mockResolvedValueOnce(third)
+    expect(await getBrowser()).toBe(third)
+    expect(launch).toHaveBeenCalledTimes(3)
+  })
+
+  it('rejects straight away on a failed launch without caching the failure', async () => {
+    await closeBrowser()
+    launch.mockReset()
+    launch.mockRejectedValueOnce(new Error('browser boom'))
+
+    await expect(getBrowser()).rejects.toThrow('browser boom')
+
+    // the next call tries again instead of replaying the cached rejection
+    const alive = fakeBrowser() as unknown as Browser
+    launch.mockResolvedValueOnce(alive)
+    expect(await getBrowser()).toBe(alive)
+    expect(launch).toHaveBeenCalledTimes(2)
+
+    // closeBrowser releases the cache too
+    await closeBrowser()
+    const next = fakeBrowser() as unknown as Browser
+    launch.mockResolvedValueOnce(next)
+    expect(await getBrowser()).toBe(next)
+    expect(launch).toHaveBeenCalledTimes(3)
   })
 })

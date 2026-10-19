@@ -10,6 +10,7 @@ import type {
   Notification,
   OrphanedDiscrepancy,
   ReconcileFlag,
+  RateInfo,
   Room,
   RoomTemplate,
   SessionDay,
@@ -23,7 +24,8 @@ import type {
   TournamentSummary,
   Transaction,
   TransactionType,
-  UpdateCheckResult
+  UpdateCheckResult,
+  WriteoffReason
 } from './types'
 
 const REQUEST_TIMEOUT_MS = 15_000
@@ -124,10 +126,10 @@ export const api = {
     update: (id: number, payload: TransactionPayload) =>
       request<{ transaction: Transaction }>(`/transactions/${id}`, { method: 'PUT', body: JSON.stringify(payload) }).then((r) => r.transaction),
     remove: (id: number) => request<{ ok: true }>(`/transactions/${id}`, { method: 'DELETE' }),
-    writeoffDiscrepancy: (roomId: number, date: string, comment: string) =>
+    writeoffDiscrepancy: (roomId: number, date: string, comment: string, reason: WriteoffReason = 'casino') =>
       request<{ reconcile: DayReconcile }>('/transactions/writeoff-discrepancy', {
         method: 'POST',
-        body: JSON.stringify({ roomId, date, comment })
+        body: JSON.stringify({ roomId, date, comment, reason })
       }).then((r) => r.reconcile)
   },
   balances: {
@@ -149,11 +151,20 @@ export const api = {
       lines: TournamentLineInput[],
       imports: TournamentImportEntry[] = [],
       removedImportIds: number[] = [],
-      writeoffCasino = false
+      /** null = plain save; a reason closes the day in the same request. */
+      writeoff: WriteoffReason | null = null
     ) =>
       request<{ rows: TournamentRow[]; reconcile: DayReconcile; days: DayReconcile[]; reanchored: { from: string; to: string } | null }>('/tournaments/bulk', {
         method: 'POST',
-        body: JSON.stringify({ roomId, date, lines, imports, removedImportIds, writeoffCasino }),
+        body: JSON.stringify({
+          roomId,
+          date,
+          lines,
+          imports,
+          removedImportIds,
+          writeoff: writeoff !== null,
+          writeoffReason: writeoff ?? undefined
+        }),
         timeoutMs: UPLOAD_TIMEOUT_MS
       }),
     preview: (
@@ -219,6 +230,7 @@ export const api = {
     update: () => request<SystemUpdateResult>('/system/update', { method: 'POST', timeoutMs: UPLOAD_TIMEOUT_MS })
   },
   rates: {
-    status: () => request<{ usdRub: { date: string; rate: number } | null; eurUsd: { date: string; rate: number } | null; stale: boolean }>('/rates/status')
+    status: () =>
+      request<{ usdRub: RateInfo; eurUsd: RateInfo; cnyUsd: RateInfo; stale: boolean }>('/rates/status')
   }
 }

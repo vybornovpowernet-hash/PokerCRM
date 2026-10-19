@@ -15,7 +15,7 @@ import {
   saveDayBatch,
   tournamentProfitUsd,
   tournamentsExistMap,
-  writeoffCasinoRemainder
+  writeoffRemainder
 } from '../src/services/tournaments.js'
 import type { TournamentImportInput } from '../src/services/tournaments.js'
 import { upsertRate } from '../src/services/rates/storage.js'
@@ -144,14 +144,32 @@ describe('tournaments', () => {
     replaceDayTournaments(pokerdon, '2026-09-10', [{ buyin: 50_00, result: 80_00, currency: 'RUB' }])
 
     const expected = 40_00 - rubToUsd(30_00)!
-    const reconcile = writeoffCasinoRemainder(pokerdon, '2026-09-10')
+    const reconcile = writeoffRemainder(pokerdon, '2026-09-10')
     expect(reconcile.casinoUsd).toBe(expected)
     expect(reconcile.remainderUsd ?? 1_000_000).toBeLessThan(5)
     expect(reconcile.flagged).toBe(false)
     const row = getDb()
-      .prepare("SELECT amount, fee, currency, direction FROM transactions WHERE room_id = ? AND date = ? AND type = 'casino'")
+      .prepare("SELECT amount, fee, currency, direction, writeoff, writeoff_reason FROM transactions WHERE room_id = ? AND date = ? AND type = 'casino'")
       .get(pokerdon, '2026-09-10')
-    expect(row).toMatchObject({ amount: expected, fee: 0, currency: 'USD', direction: 'in' })
+    expect(row).toMatchObject({ amount: expected, fee: 0, currency: 'USD', direction: 'in', writeoff: 1, writeoff_reason: 'casino' })
+  })
+
+  it('stores the write-off reason and defaults an omitted one to casino', () => {
+    upsertBalance(pokerdon, '2026-09-09', 100_00, 'USD')
+    upsertBalance(pokerdon, '2026-09-10', 140_00, 'USD')
+    replaceDayTournaments(pokerdon, '2026-09-10', [{ buyin: 50_00, result: 80_00, currency: 'RUB' }])
+    writeoffRemainder(pokerdon, '2026-09-10', 'fx')
+
+    const reasons = () =>
+      getDb()
+        .prepare("SELECT writeoff_reason AS reason, comment FROM transactions WHERE room_id = ? AND date = ? AND writeoff = 1 ORDER BY id")
+        .all(pokerdon, '2026-09-10') as unknown as { reason: string; comment: string }[]
+    expect(reasons()).toEqual([{ reason: 'fx', comment: 'Авто-списание: остаток дня — разница курсов (2026-09-10)' }])
+
+    // a balance edit re-opens the day; the default reason is casino
+    upsertBalance(pokerdon, '2026-09-10', 160_00, 'USD')
+    writeoffRemainder(pokerdon, '2026-09-10')
+    expect(reasons().map((r) => r.reason)).toEqual(['fx', 'casino'])
   })
 
   it('records a write-off without moving the balance it explains', () => {
@@ -159,7 +177,7 @@ describe('tournaments', () => {
     upsertBalance(pokerdon, '2026-09-10', 140_00, 'USD')
     replaceDayTournaments(pokerdon, '2026-09-10', [{ buyin: 50_00, result: 80_00, currency: 'RUB' }])
 
-    writeoffCasinoRemainder(pokerdon, '2026-09-10')
+    writeoffRemainder(pokerdon, '2026-09-10')
 
     // the snapshot already measures this delta: counting it twice would leave the
     // day just as far from reconciled (and the profit of the day wrong by it)
@@ -178,12 +196,12 @@ describe('tournaments', () => {
         .prepare("SELECT amount FROM transactions WHERE room_id = ? AND date = ? AND type = 'casino' ORDER BY id")
         .all(pokerdon, '2026-09-10') as unknown as { amount: number }[]
 
-    const first = writeoffCasinoRemainder(pokerdon, '2026-09-10')
+    const first = writeoffRemainder(pokerdon, '2026-09-10')
     expect(first.remainderUsd).toBe(0)
     expect(casinoRows().map((r) => r.amount)).toEqual([40_00 - rubToUsd(30_00)!])
 
     // a repeat press on an already closed day is a no-op, not a second row
-    expect(writeoffCasinoRemainder(pokerdon, '2026-09-10').remainderUsd).toBe(0)
+    expect(writeoffRemainder(pokerdon, '2026-09-10').remainderUsd).toBe(0)
     expect(casinoRows()).toHaveLength(1)
 
     // a retrospective balance edit is no longer swallowed: the day honestly
@@ -195,7 +213,7 @@ describe('tournaments', () => {
 
     // re-closing records the new remainder as its own casino row and leaves the
     // measured balance alone
-    expect(writeoffCasinoRemainder(pokerdon, '2026-09-10').remainderUsd).toBe(0)
+    expect(writeoffRemainder(pokerdon, '2026-09-10').remainderUsd).toBe(0)
     expect(casinoRows().map((r) => r.amount)).toEqual([40_00 - rubToUsd(30_00)!, 20_00])
     expect(getBalance(pokerdon, '2026-09-10')?.amount).toBe(160_00)
   })

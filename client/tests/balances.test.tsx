@@ -45,7 +45,12 @@ function serverState(amount: number): CurrentBalances {
       }
     ],
     totalUsd: amount,
-    rates: { stale: false, usdRub: null, eurUsd: null }
+    rates: {
+      stale: true,
+      usdRub: { rate: 91.25, date: '2026-09-18', updatedAt: '2026-09-18T09:00:00.000Z', stale: false },
+      eurUsd: { rate: 1.0842, date: '2026-09-17', updatedAt: '2026-09-18T09:00:00.000Z', stale: true },
+      cnyUsd: { rate: null, date: null, updatedAt: null, stale: true }
+    }
   }
 }
 
@@ -78,5 +83,21 @@ describe('BalancesPage — manual balance input', () => {
 
     await waitFor(() => expect(input.value).toBe('1 234.56'))
     expect(screen.getAllByText('$1234.56').length).toBeGreaterThan(0)
+  })
+})
+
+describe('BalancesPage — курсы по источникам', () => {
+  it('shows each feed with its own rate and freshness instead of one aggregate', async () => {
+    render(<BalancesPage />)
+
+    expect(await screen.findByText('USD/RUB')).toBeTruthy()
+    // USD/RUB is fresh, EUR/USD is stale, USD/CNY was never fetched
+    expect(screen.getByText('91.2500')).toBeTruthy()
+    expect(screen.getByText('1.0842')).toBeTruthy()
+    expect(screen.getAllByRole('img', { name: 'актуально' })).toHaveLength(1)
+    expect(screen.getAllByRole('img', { name: 'устарел' })).toHaveLength(1)
+    expect(screen.getAllByRole('img', { name: 'нет данных' })).toHaveLength(1)
+    // the aggregate line summarises the feeds rather than replacing them
+    expect(screen.getByText('часть курсов устарела')).toBeTruthy()
   })
 })

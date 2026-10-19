@@ -48,6 +48,14 @@ export function getLatestScaledRate(from: string, to: string): number | null {
   return row ? row.rate : null
 }
 
+/** Latest stored row for a pair (any day), or null when it was never fetched. */
+export function getLatestRate(from: string, to: string): RateRow | null {
+  const row = getDb()
+    .prepare('SELECT * FROM exchange_rates WHERE from_currency = ? AND to_currency = ? ORDER BY date DESC LIMIT 1')
+    .get(from, to) as unknown as RateRowRow | undefined
+  return row ? mapRow(row) : null
+}
+
 export function upsertRate(date: string, from: string, to: string, rateScaled: number, source: string): void {
   getDb()
     .prepare(
@@ -59,19 +67,23 @@ export function upsertRate(date: string, from: string, to: string, rateScaled: n
     .run(date, from, to, rateScaled, source)
 }
 
-function parseDbTimestamp(raw: string): Date {
+export function parseDbTimestamp(raw: string): Date {
   return new Date(`${raw.replace(' ', 'T')}Z`)
 }
 
+/**
+ * Whether a single stored row is older than `maxAgeMs`. Freshness is per feed,
+ * not global: one dead source must not be masked by a live sibling (a `MAX()`
+ * over the whole table reports a feed that stopped updating as fresh).
+ */
+export function isRateRowStale(updatedAt: string, maxAgeMs: number): boolean {
+  return Date.now() - parseDbTimestamp(updatedAt).getTime() > maxAgeMs
+}
+
+/** Newest write across all feeds — informational only, never a freshness test. */
 export function lastRateUpdate(): Date | null {
   const row = getDb().prepare('SELECT MAX(updated_at) AS u FROM exchange_rates').get() as { u: string | null } | undefined
   return row?.u ? parseDbTimestamp(row.u) : null
-}
-
-export function isRateStale(maxAgeMs: number): boolean {
-  const last = lastRateUpdate()
-  if (!last) return true
-  return Date.now() - last.getTime() > maxAgeMs
 }
 
 export function ratesForDate(date: string): RateRow[] {

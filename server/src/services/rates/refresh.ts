@@ -92,34 +92,52 @@ export async function refreshCnyUsd(): Promise<void> {
   storage.upsertRate(dayKey(), 'USD', 'CNY', Math.round(rate * RATE_SCALE), 'er-api')
 }
 
-/** Refresh if the cached rates are older than STALE_AFTER_MS. */
-export function ratesAreStale(): boolean {
-  return storage.isRateStale(STALE_AFTER_MS)
-}
-
-export interface RatesStatus {
-  usdRub: { date: string; rate: number } | null
-  eurUsd: { date: string; rate: number } | null
-  cnyUsd: { date: string; rate: number } | null
+/**
+ * Freshness of one feed. `rate`/`date` describe the latest known row (the same
+ * value conversions fall back to), `stale` answers the only question the UI
+ * must not lie about: has THIS source updated within STALE_AFTER_MS?
+ */
+export interface RateFeed {
+  rate: number | null
+  date: string | null
   updatedAt: string | null
   stale: boolean
 }
 
+export interface RatesStatus {
+  usdRub: RateFeed
+  eurUsd: RateFeed
+  cnyUsd: RateFeed
+  /** Newest write across feeds (informational). */
+  updatedAt: string | null
+  /** True when at least one feed is stale. */
+  stale: boolean
+}
+
 export function getRatesStatus(): RatesStatus {
-  const today = dayKey()
+  const usdRub = feedStatus('USD', 'RUB')
+  const eurUsd = feedStatus('EUR', 'USD')
+  const cnyUsd = feedStatus('USD', 'CNY')
   return {
-    usdRub: statusFor('USD', 'RUB', today),
-    eurUsd: statusFor('EUR', 'USD', today),
-    cnyUsd: statusFor('USD', 'CNY', today),
+    usdRub,
+    eurUsd,
+    cnyUsd,
     updatedAt: storage.lastRateUpdate()?.toISOString() ?? null,
-    stale: ratesAreStale()
+    // Any stale feed degrades the status: a dead source stays visible instead of
+    // being hidden behind a live sibling, which is what the old MAX() did.
+    stale: usdRub.stale || eurUsd.stale || cnyUsd.stale
   }
 }
 
-function statusFor(from: string, to: string, date: string): { date: string; rate: number } | null {
-  const scaled = storage.getScaledRate(from, to, date)
-  if (scaled === null) return null
-  return { date, rate: scaled / RATE_SCALE }
+function feedStatus(from: string, to: string): RateFeed {
+  const row = storage.getLatestRate(from, to)
+  if (!row) return { rate: null, date: null, updatedAt: null, stale: true }
+  return {
+    rate: row.rate / RATE_SCALE,
+    date: row.date,
+    updatedAt: storage.parseDbTimestamp(row.updatedAt).toISOString(),
+    stale: storage.isRateRowStale(row.updatedAt, STALE_AFTER_MS)
+  }
 }
 
 async function runWithNotification(kind: string, label: string, fn: () => Promise<void>): Promise<boolean> {

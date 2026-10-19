@@ -10,9 +10,10 @@ import {
   reconcileDay,
   reconcileSummary,
   saveDayBatch,
-  writeoffCasinoRemainder
+  writeoffRemainder
 } from '../services/tournaments.js'
 import type { TournamentImportInput, TournamentLineInput } from '../services/tournaments.js'
+import { validateWriteoffReason } from '../services/funds.js'
 import { TournamentParseError } from '../services/parsers/types.js'
 import type { TournamentParserInput } from '../services/parsers/types.js'
 import { resolveTournamentParser } from '../services/parsers/registry.js'
@@ -103,12 +104,13 @@ export async function tournamentsRoutes(app: FastifyInstance): Promise<void> {
   })
 
   /**
-   * One request = the whole popup save. `writeoffCasino` closes the modal day
-   * with «Списать на казино» in the same transaction as the import itself, so
-   * the day can never end up saved-but-open (the frontend used to follow the
-   * save with a second `/writeoff-casino` call, and a failure in between left
-   * the tournaments persisted and the day hanging in Транзакции). The returned
-   * `reconcile` is the post-write-off day.
+   * One request = the whole popup save. `writeoff` closes the modal day in the
+   * same transaction as the import itself — `writeoffReason` ('casino' | 'fx' |
+   * 'other', default 'casino') records why — so the day can never end up
+   * saved-but-open (the frontend used to follow the save with a second
+   * `/writeoff` call, and a failure in between left the tournaments persisted
+   * and the day hanging in Транзакции). The returned `reconcile` is the
+   * post-write-off day.
    */
   app.post<{
     Body: {
@@ -117,18 +119,23 @@ export async function tournamentsRoutes(app: FastifyInstance): Promise<void> {
       lines: TournamentLineInput[]
       imports?: TournamentImportInput[]
       removedImportIds?: number[]
-      writeoffCasino?: boolean
+      writeoff?: boolean
+      writeoffReason?: string
     }
   }>('/api/tournaments/bulk', async (req) => {
-    const { roomId, date, lines, imports, removedImportIds, writeoffCasino } = req.body
+    const { roomId, date, lines, imports, removedImportIds, writeoff } = req.body
     if (!Array.isArray(lines)) throw new HttpError(400, 'lines must be an array')
     if (imports !== undefined && !Array.isArray(imports)) throw new HttpError(400, 'imports must be an array')
     if (removedImportIds !== undefined && !Array.isArray(removedImportIds)) throw new HttpError(400, 'removedImportIds must be an array')
-    if (writeoffCasino !== undefined && typeof writeoffCasino !== 'boolean') {
-      throw new HttpError(400, 'writeoffCasino must be a boolean')
+    if (writeoff !== undefined && typeof writeoff !== 'boolean') {
+      throw new HttpError(400, 'writeoff must be a boolean')
     }
+    const writeoffReason = validateWriteoffReason(req.body.writeoffReason)
     const dayId = parseId(roomId)
-    const batch = saveDayBatch(dayId, date, lines, imports ?? [], removedImportIds ?? [], { writeoffCasino: writeoffCasino === true })
+    const batch = saveDayBatch(dayId, date, lines, imports ?? [], removedImportIds ?? [], {
+      writeoff: writeoff === true,
+      writeoffReason
+    })
     const modalReconcile = batch.reconciles.find((r) => r.date === date) ?? reconcileDay(dayId, date)
     return { rows: batch.rows, reconcile: modalReconcile, days: batch.reconciles, reanchored: batch.reanchored }
   })
@@ -164,8 +171,8 @@ export async function tournamentsRoutes(app: FastifyInstance): Promise<void> {
     return { reconcile: adjustBalanceToTournaments(parseId(roomId), date) }
   })
 
-  app.post<{ Body: { roomId: number; date: string } }>('/api/tournaments/writeoff-casino', async (req) => {
+  app.post<{ Body: { roomId: number; date: string; reason?: string } }>('/api/tournaments/writeoff', async (req) => {
     const { roomId, date } = req.body
-    return { reconcile: writeoffCasinoRemainder(parseId(roomId), date) }
+    return { reconcile: writeoffRemainder(parseId(roomId), date, validateWriteoffReason(req.body.reason)) }
   })
 }

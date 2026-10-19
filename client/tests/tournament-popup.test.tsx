@@ -260,7 +260,7 @@ describe('TournamentPopup — GG multi-archive upload', () => {
   })
 })
 
-describe('TournamentPopup — «Списать на казино»', () => {
+describe('TournamentPopup — списание остатка с причиной', () => {
   const flagged = {
     date: '2026-09-16',
     roomId: 1,
@@ -275,7 +275,7 @@ describe('TournamentPopup — «Списать на казино»', () => {
   }
   const closed = { ...flagged, remainderUsd: 0, discrepancyPct: 0, flagged: false, casinoUsd: 200_00 }
 
-  it('saves the import and closes the day in one request', async () => {
+  it('saves the import and closes the day in one request, carrying the chosen reason', async () => {
     mocks.list.mockResolvedValue([])
     mocks.preview.mockResolvedValue({ reconcile: flagged, wouldReanchor: null })
     mocks.save.mockResolvedValue({ rows: [], reconcile: closed, days: [closed] })
@@ -285,18 +285,36 @@ describe('TournamentPopup — «Списать на казино»', () => {
     await user.click(screen.getByRole('button', { name: 'Проверить' }))
     expect(await screen.findByText(/Расхождение 100%/)).toBeTruthy()
 
-    await user.click(screen.getByRole('button', { name: 'Списать на казино' }))
+    // the reason is a deliberate choice, not a hidden default
+    await user.click(screen.getByRole('button', { name: 'Списать остаток…' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Казино' }))
 
-    // one request carries the whole action — the write-off flag rides with the save
+    // one request carries the whole action — the write-off reason rides with the save
     await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(1))
-    expect(mocks.save).toHaveBeenCalledWith(1, '2026-09-16', [], [], [], true)
+    expect(mocks.save).toHaveBeenCalledWith(1, '2026-09-16', [], [], [], 'casino')
     // no second round-trip could leave the day saved-but-open
     expect(mocks.adjustBalance).not.toHaveBeenCalled()
     // the closed day the server answered with is shown as is
     expect(await screen.findByText('Расхождение в пределах 5% — сходится.')).toBeTruthy()
   })
 
-  it('saves without the write-off flag on a plain «Сохранить»', async () => {
+  it('passes a non-casino reason through to the server', async () => {
+    mocks.list.mockResolvedValue([])
+    mocks.preview.mockResolvedValue({ reconcile: flagged, wouldReanchor: null })
+    mocks.save.mockResolvedValue({ rows: [], reconcile: closed, days: [closed] })
+    const user = userEvent.setup()
+    renderPopup(pokerdom)
+
+    await user.click(screen.getByRole('button', { name: 'Проверить' }))
+    await screen.findByText(/Расхождение 100%/)
+    await user.click(screen.getByRole('button', { name: 'Списать остаток…' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Разница курсов' }))
+
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(1))
+    expect(mocks.save).toHaveBeenCalledWith(1, '2026-09-16', [], [], [], 'fx')
+  })
+
+  it('saves without a write-off on a plain «Сохранить»', async () => {
     mocks.list.mockResolvedValue([])
     mocks.save.mockResolvedValue({ rows: [], reconcile: null, days: [] })
     const user = userEvent.setup()
@@ -334,7 +352,7 @@ describe('TournamentPopup — «Списать на казино»', () => {
     expect(await screen.findByText(auto.blank)).toBeTruthy()
     expect(screen.queryByText('Расхождение в пределах 5% — сходится.')).toBeNull()
     // nothing to write off or adjust — the fix is recording the balance itself
-    expect(screen.queryByRole('button', { name: 'Списать на казино' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Списать остаток…' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Поправить баланс' })).toBeNull()
   })
 })
@@ -366,7 +384,7 @@ describe('TournamentPopup — баланс-реанкор в превью', () =
     expect(await screen.findByText(/Баланс 2026-09-16 будет привязан к 2026-09-15 при сохранении/)).toBeTruthy()
     expect(screen.queryByText(/Расхождение \d+%/)).toBeNull()
     expect(screen.getByText('Расхождение в пределах 5% — сходится.')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Списать на казино' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Списать остаток…' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Поправить баланс' })).toBeNull()
   })
 })

@@ -10,6 +10,7 @@ import {
   updateTransaction
 } from '../services/funds.js'
 import { orphanedDiscrepancies, writeoffDiscrepancy } from '../services/tournaments.js'
+import { validateWriteoffReason } from '../services/funds.js'
 import type { TransactionInput } from '../services/funds.js'
 
 export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
@@ -42,13 +43,13 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
     return { transaction: createTransaction(req.body) }
   })
 
-  app.post<{ Body: { roomId: string | number; date: string; comment?: string } }>(
+  app.post<{ Body: { roomId: string | number; date: string; comment?: string; reason?: string } }>(
     '/api/transactions/writeoff-discrepancy',
     async (req) => {
       const { date, comment } = req.body
       const roomId = typeof req.body.roomId === 'number' ? req.body.roomId : parseId(req.body.roomId)
       if (!date || !isValidDayKey(date)) throw new HttpError(400, 'date: must be a valid YYYY-MM-DD day')
-      return { reconcile: writeoffDiscrepancy(roomId, date, comment ?? '') }
+      return { reconcile: writeoffDiscrepancy(roomId, date, comment ?? '', validateWriteoffReason(req.body.reason)) }
     }
   )
 

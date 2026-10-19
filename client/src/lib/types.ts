@@ -68,6 +68,27 @@ export interface SystemUpdateResult {
 export type TransactionType = 'deposit' | 'withdraw' | 'transfer' | 'casino'
 export type Direction = 'in' | 'out'
 
+/**
+ * Why a day-closing write-off was made. The row itself is always of type
+ * `casino` (that is its accounting shape); the reason is what the popup records
+ * and the badge in «Транзакции» shows.
+ */
+export type WriteoffReason = 'casino' | 'fx' | 'other'
+
+export const WRITEOFF_REASONS: readonly WriteoffReason[] = ['casino', 'fx', 'other']
+
+export const WRITEOFF_REASON_LABELS: Record<WriteoffReason, string> = {
+  casino: 'Казино',
+  fx: 'Разница курсов',
+  other: 'Прочее'
+}
+
+export const WRITEOFF_REASON_HINTS: Record<WriteoffReason, string> = {
+  casino: 'Остаток дня — игра в казино',
+  fx: 'Курс изменился между записью баланса и операцией',
+  other: 'Ничего из перечисленного — поясни в комментарии'
+}
+
 export interface Transaction {
   id: number
   roomId: number
@@ -86,6 +107,8 @@ export interface Transaction {
   amountUsd: number | null
   /** System day-closing write-off: immutable on the server, no edit controls. */
   writeoff: boolean
+  /** Why the write-off was made; null for user-entered rows. */
+  writeoffReason: WriteoffReason | null
 }
 
 export interface FlowTotal {
@@ -117,8 +140,14 @@ export interface BalanceEntry {
 }
 
 export interface RateInfo {
-  date: string
-  rate: number
+  /** Latest known rate for the pair (the value conversions fall back to). */
+  rate: number | null
+  /** Day that rate belongs to. */
+  date: string | null
+  /** When the feed last wrote that row (ISO). */
+  updatedAt: string | null
+  /** This feed has not updated within the staleness window. */
+  stale: boolean
 }
 
 export interface CurrentBalances {
@@ -131,7 +160,7 @@ export interface CurrentBalances {
     }
   >
   totalUsd: number | null
-  rates: { stale: boolean; usdRub: RateInfo | null; eurUsd: RateInfo | null }
+  rates: { stale: boolean; usdRub: RateInfo; eurUsd: RateInfo; cnyUsd: RateInfo }
 }
 
 export interface RoomProfit {

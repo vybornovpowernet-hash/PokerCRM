@@ -15,6 +15,14 @@ const DEFAULT_POKERDOM_MIRRORS: readonly string[] = [
 ]
 const PAGE_TIMEOUT_MS = 30_000
 const TEXT_WAIT_MS = 30_000
+/**
+ * Ceiling for every Playwright call that would otherwise be unbounded. `goto`
+ * and `waitForSelector` pass their timeouts explicitly; the context default
+ * covers the rest — `locator.innerText()` defaults to no timeout at all, so a
+ * wedged page would leave `scrapeUsdRub` pending forever and the refresh retry
+ * would never even start (the attempt would never settle).
+ */
+const ACTION_TIMEOUT_MS = 30_000
 const ATTEMPTS = 3
 
 /** Ordered, deduplicated mirror list; an empty/garbage variable falls back to the defaults. */
@@ -134,10 +142,25 @@ async function launchBrowser(): Promise<Browser> {
 
 export function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
-    browserPromise = launchBrowser().catch((err: unknown) => {
-      browserPromise = null
-      throw err
-    })
+    const pending = launchBrowser()
+    browserPromise = pending
+    pending.then(
+      (browser) => {
+        // A crashed Chromium (OOM, killed by the OS, a manual close) keeps its
+        // promise resolved but rejects every `newContext` from then on, so the
+        // cache has to be dropped — otherwise each later attempt fails
+        // instantly and only a restart would heal the scraper.
+        browser.on('disconnected', () => {
+          if (browserPromise === pending) browserPromise = null
+        })
+      },
+      // A failed launch must not be cached: the next call has to try again.
+      // The handler also keeps the rejection from surfacing as an unhandled one
+      // — the awaiting caller still gets it.
+      () => {
+        if (browserPromise === pending) browserPromise = null
+      }
+    )
   }
   return browserPromise
 }
@@ -160,6 +183,9 @@ export async function scrapeUsdRub(): Promise<number> {
     try {
       const context = await browser.newContext({ locale: 'ru-RU' })
       try {
+        // every call without an explicit timeout (page creation, innerText) is
+        // capped by this, so an attempt always settles
+        context.setDefaultTimeout(ACTION_TIMEOUT_MS)
         const page: Page = context.pages()[0] ?? (await context.newPage())
         return await scrapeFromMirrors(page, urls)
       } finally {
@@ -212,6 +238,6 @@ function errorMessage(err: unknown): string {
 }
 
 async function parsePage(page: Page): Promise<number> {
-  const text = await page.locator('body').innerText()
+  const text = await page.locator('body').innerText({ timeout: ACTION_TIMEOUT_MS })
   return parseUsdRateFromPage(text)
 }

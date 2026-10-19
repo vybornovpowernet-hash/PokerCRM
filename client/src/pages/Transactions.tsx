@@ -3,11 +3,15 @@ import { api, type TransactionPayload } from '../lib/api'
 import {
   DIRECTION_LABELS,
   TRANSACTION_TYPE_LABELS,
+  WRITEOFF_REASON_LABELS,
+  WRITEOFF_REASON_HINTS,
+  WRITEOFF_REASONS,
   type Direction,
   type OrphanedDiscrepancy,
   type Room,
   type Transaction,
-  type TransactionType
+  type TransactionType,
+  type WriteoffReason
 } from '../lib/types'
 import { formatAmount, parseUnits } from '../lib/money'
 import { emitBalancesChanged } from '../lib/events'
@@ -62,6 +66,7 @@ export default function TransactionsPage() {
   const [loading, setLoading] = useState(true)
   const [writeoffFor, setWriteoffFor] = useState<OrphanedDiscrepancy | null>(null)
   const [writeoffComment, setWriteoffComment] = useState('')
+  const [writeoffReason, setWriteoffReason] = useState<WriteoffReason>('casino')
   const [writeoffBusy, setWriteoffBusy] = useState(false)
   const [writeoffError, setWriteoffError] = useState<string | null>(null)
   const [filter, setFilter] = useState<{ type: TransactionType | ''; roomId: number | ''; dateFrom: string; dateTo: string }>({
@@ -223,7 +228,7 @@ export default function TransactionsPage() {
     setWriteoffBusy(true)
     setWriteoffError(null)
     try {
-      await api.transactions.writeoffDiscrepancy(writeoffFor.roomId, writeoffFor.date, comment)
+      await api.transactions.writeoffDiscrepancy(writeoffFor.roomId, writeoffFor.date, comment, writeoffReason)
       setWriteoffFor(null)
       setWriteoffComment('')
       emitBalancesChanged()
@@ -435,7 +440,7 @@ export default function TransactionsPage() {
               <th className="w-[100px] whitespace-nowrap px-4 py-3 text-right">Комиссия</th>
               <th className="whitespace-nowrap px-4 py-3">Контрагент</th>
               <th className="w-[200px] px-4 py-3">Комментарий</th>
-              <th className="w-[160px] whitespace-nowrap px-4 py-3 text-right">Действия</th>
+              <th className="w-[190px] whitespace-nowrap px-4 py-3 text-right">Действия</th>
             </tr>
           </thead>
           <tbody>
@@ -475,11 +480,12 @@ export default function TransactionsPage() {
                     <td className="px-4 py-3 text-xs text-amber-300/90">
                       Баланс не сходится с турнирами — внеси турниры или спиши это расхождение
                     </td>
-                    <td className="w-[160px] whitespace-nowrap px-4 py-3 text-right">
+                    <td className="w-[190px] whitespace-nowrap px-4 py-3 text-right">
                       <div className="flex justify-end gap-2">
                         <button
                           onClick={() => {
                             setWriteoffComment('')
+                            setWriteoffReason('casino')
                             setWriteoffError(null)
                             setWriteoffFor(d)
                           }}
@@ -542,13 +548,15 @@ export default function TransactionsPage() {
                       <span className="text-slate-600">—</span>
                     )}
                   </td>
-                  <td className="w-[160px] whitespace-nowrap px-4 py-3 text-right">
+                  <td className="w-[190px] whitespace-nowrap px-4 py-3 text-right">
                     {t.writeoff ? (
                       <span
-                        title="Системное списание закрытия дня: оно уже учтено в балансе за этот день, поэтому не редактируется"
+                        title={`Системное списание закрытия дня (причина: ${
+                          t.writeoffReason ? WRITEOFF_REASON_LABELS[t.writeoffReason].toLowerCase() : 'не указана'
+                        }): оно уже учтено в балансе за этот день, поэтому не редактируется`}
                         className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-500"
                       >
-                        Списание
+                        Списание{t.writeoffReason ? ` · ${WRITEOFF_REASON_LABELS[t.writeoffReason]}` : ''}
                       </span>
                     ) : (
                       <div className="flex justify-end gap-2">
@@ -571,14 +579,37 @@ export default function TransactionsPage() {
       {writeoffFor && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setWriteoffFor(null)}>
           <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-800 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-slate-100">Списать на казино</h3>
+            <h3 className="text-lg font-semibold text-slate-100">Списать расхождение</h3>
             <p className="mt-1 text-sm text-slate-400">
               <span style={{ color: roomColor(writeoffFor.roomId) }}>{writeoffFor.roomName}</span> · {writeoffFor.date} ·{' '}
               {formatAmount(writeoffFor.amountUsd, 'USD')}
             </p>
             <p className="mt-2 text-xs text-amber-300/80">
-              Расхождение баланса будет учтено как игра в казино и закроет сверку за этот день.
+              Остаток дня запишется одной строкой казино-P&L с этой причиной и закроет сверку за день.
             </p>
+            <div className="mt-4">
+              <span className="mb-1 block text-xs text-slate-400">Причина списания</span>
+              <div className="flex flex-wrap gap-2">
+                {WRITEOFF_REASONS.map((reason) => {
+                  const active = writeoffReason === reason
+                  return (
+                    <button
+                      key={reason}
+                      onClick={() => setWriteoffReason(reason)}
+                      aria-pressed={active}
+                      title={WRITEOFF_REASON_HINTS[reason]}
+                      className={`rounded-lg border px-3 py-1.5 text-sm transition ${
+                        active
+                          ? 'border-amber-500/60 bg-amber-950/40 text-amber-200'
+                          : 'border-slate-700 text-slate-300 hover:border-slate-500'
+                      }`}
+                    >
+                      {WRITEOFF_REASON_LABELS[reason]}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
             <label className="mt-4 block">
               <span className="mb-1 block text-xs text-slate-400">Комментарий (обязательно)</span>
               <input
