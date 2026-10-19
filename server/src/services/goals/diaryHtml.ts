@@ -64,7 +64,10 @@ function sanitizeAttrs(name: string, raw: string): string {
 }
 
 export function sanitizeDiaryHtml(html: string): string {
-  return html.replace(/<[^>]*>/g, (tag) => {
+  // A `<` with no closing `>` anywhere after it is an unterminated tag: the
+  // regex below would never see it, so it would reach the DOM verbatim.
+  const closed = html.replace(/<[^>]*$/g, '')
+  return closed.replace(/<[^>]*>/g, (tag) => {
     const match = /^<\s*(\/?)\s*([a-z][a-z0-9]*)/i.exec(tag)
     if (!match) return ''
     const name = (match[2] ?? '').toLowerCase()

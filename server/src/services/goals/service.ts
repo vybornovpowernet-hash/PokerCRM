@@ -219,7 +219,9 @@ export function updateUserEntry(id: number, entryId: number, content: unknown, i
   if (!existing) throw new HttpError(404, 'Entry not found')
   if (existing.kind !== 'user') throw new HttpError(400, 'Only diary notes can be edited')
   const text = validateContent(content)
-  const attachments = validateImages(images)
+  // An omitted `images` field means "keep the attachments"; only an explicit
+  // payload (including an empty array) replaces them and frees the old blobs.
+  const attachments = images === undefined ? existing.images : validateImages(images)
   const updated = withTransaction(() => updateEntry(id, entryId, text, attachments))
   for (const path of existing.images) {
     if (!attachments.includes(path)) deleteDiaryImage(path)

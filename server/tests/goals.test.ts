@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { existsSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { initDb, resetDbForTests, setDbForTests, getDb } from '../src/db.js'
 import { createRoom } from '../src/services/rooms.js'
 import { HttpError } from '../src/lib/errors.js'
 import { dayKey } from '../src/lib/date.js'
 import { acknowledgeGoal, addUserEntry, closeGoal, createGoal, deleteUserEntry, listGoals, reorderGoals, setChecklist, updateUserEntry } from '../src/services/goals/service.js'
+import { sanitizeDiaryHtml } from '../src/services/goals/diaryHtml.js'
 import type { ChecklistItem, GoalEntry, GoalWithProgress } from '../src/services/goals/types.js'
+import { DIARY_DIR, saveDiaryImage } from '../src/services/uploads.js'
 
 beforeEach(() => {
   setDbForTests(initDb(':memory:'))
@@ -585,6 +589,15 @@ describe('goal checklists', () => {
 
 const IMG_A = 'diary/2f9c1e7a-3b4d-4c5e-8f01-9a2b3c4d5e6f.png'
 const IMG_B = 'diary/11111111-2222-3333-4444-555555555555.jpg'
+const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+const writtenFiles: string[] = []
+
+afterEach(() => {
+  for (const file of writtenFiles.splice(0)) {
+    if (existsSync(file)) rmSync(file)
+  }
+})
 
 describe('goal diary entries', () => {
   it('stores attached image paths on a new note and returns them on read', () => {
@@ -618,6 +631,33 @@ describe('goal diary entries', () => {
     const [listed] = listGoals()
     expect(listed.entries).toHaveLength(1)
     expect(listed.entries[0]?.content).toBe('исправленная версия')
+  })
+
+  it('keeps existing photos when the update omits the images field entirely', () => {
+    const goal = createGoal({ metric: 'custom', targetUnits: 1, title: 'Дневник' })
+    const entry = addUserEntry(goal.id, 'с фото', [IMG_A])
+
+    const kept = updateUserEntry(goal.id, entry.id, 'текст без поля images', undefined)
+    expect(kept.images).toEqual([IMG_A])
+
+    const [listed] = listGoals()
+    expect(listed.entries[0]?.images).toEqual([IMG_A])
+  })
+
+  it('frees attached files only when an explicit images payload drops them', () => {
+    const goal = createGoal({ metric: 'custom', targetUnits: 1, title: 'Дневник' })
+    const path = saveDiaryImage(PNG_HEADER, 'image/png')
+    const file = join(DIARY_DIR, path.slice('diary/'.length))
+    writtenFiles.push(file)
+    const entry = addUserEntry(goal.id, 'с фото', [path])
+    expect(existsSync(file)).toBe(true)
+
+    updateUserEntry(goal.id, entry.id, 'без поля images', undefined)
+    expect(existsSync(file)).toBe(true)
+
+    updateUserEntry(goal.id, entry.id, 'с пустым массивом', [])
+    expect(existsSync(file)).toBe(false)
+    expect((getDb().prepare('SELECT images FROM goal_entries WHERE id = ?').get(entry.id) as { images: string }).images).toBe('[]')
   })
 
   it('refuses to edit or delete a system entry or a missing note', () => {
@@ -726,6 +766,15 @@ describe('diary html sanitization', () => {
     )
     expect(addUserEntry(goal.id, '<mark style="background-color: rgb(255, 0, 0)">x</mark>').content).toBe('<mark style="background-color: #ff0000">x</mark>')
     expect(addUserEntry(goal.id, '<mark style="background-color: rgba(0, 0, 0, 0.5)">x</mark>').content).toBe('<mark>x</mark>')
+  })
+
+  it('drops an unterminated tag fragment instead of storing it verbatim', () => {
+    const goal = createGoal({ metric: 'custom', targetUnits: 1, title: 'Дневник' })
+    expect(addUserEntry(goal.id, '<b>привет</b><img src=x onerror=alert(1)').content).toBe('<b>привет</b>')
+    expect(addUserEntry(goal.id, '<b>привет</b><').content).toBe('<b>привет</b>')
+    expect(addUserEntry(goal.id, 'смотри сюда <').content).toBe('смотри сюда')
+    expect(sanitizeDiaryHtml('<p>a</p><script>alert(1)')).toBe('<p>a</p>alert(1)')
+    expect(() => addUserEntry(goal.id, '<img src=x onerror=alert(1)')).toThrow(HttpError)
   })
 })
 

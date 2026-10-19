@@ -38,6 +38,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     }
   })
 
+  app.addHook('onSend', async (_req, reply, payload) => {
+    reply.header('X-Content-Type-Options', 'nosniff')
+    return payload
+  })
+
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof HttpError) {
       void reply.status(err.status).send({ error: err.message })

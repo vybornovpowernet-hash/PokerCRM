@@ -146,4 +146,12 @@ describe('sanitizeDiaryHtml', () => {
     expect(sanitizeDiaryHtml('<mark style="background-color: url(javascript:alert(1))">x</mark>')).toBe('<mark>x</mark>')
     expect(sanitizeDiaryHtml('<span style="background-color: #fef08a; font-size: 18px">x</span>')).toBe('<span style="font-size: 18px">x</span>')
   })
+
+  it('drops an unterminated tag fragment instead of passing it through', () => {
+    expect(sanitizeDiaryHtml('<b>привет</b><img src=x onerror=alert(1)')).toBe('<b>привет</b>')
+    expect(sanitizeDiaryHtml('<b>привет</b><')).toBe('<b>привет</b>')
+    expect(sanitizeDiaryHtml('смотри сюда <')).toBe('смотри сюда ')
+    expect(sanitizeDiaryHtml('<p>a</p><script>alert(1)')).toBe('<p>a</p>alert(1)')
+    expect(sanitizeDiaryHtml('<p>a</p> <p>b</p>')).toBe('<p>a</p> <p>b</p>')
+  })
 })

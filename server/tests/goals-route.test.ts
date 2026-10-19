@@ -88,6 +88,46 @@ describe('goals routes', () => {
     expect(entry.content).toBe('<p>Жирный <strong>акцент</strong></p>boom()')
   })
 
+  it('drops an unterminated tag fragment on POST /:id/entry', async () => {
+    const { body } = await post({ metric: 'custom', targetUnits: 1, title: 'Дневник' })
+    const goalId = (body.goal as { id: number }).id
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/goals/${goalId}/entry`,
+      payload: { content: '<p>конспект</p><img src=x onerror=boom()' }
+    })
+    expect(res.statusCode).toBe(200)
+    const entry = JSON.parse(res.body).entry as { content: string }
+    expect(entry.content).toBe('<p>конспект</p>')
+
+    const rejected = await app.inject({ method: 'POST', url: `/api/goals/${goalId}/entry`, payload: { content: '<img src=x onerror=boom()' } })
+    expect(rejected.statusCode).toBe(400)
+  })
+
+  it('keeps attachments when PUT /:id/entry omits the images field', async () => {
+    const { body } = await post({ metric: 'custom', targetUnits: 1, title: 'Дневник' })
+    const goalId = (body.goal as { id: number }).id
+    const image = 'diary/2f9c1e7a-3b4d-4c5e-8f01-9a2b3c4d5e6f.png'
+
+    const created = await app.inject({ method: 'POST', url: `/api/goals/${goalId}/entry`, payload: { content: 'с фото', images: [image] } })
+    const entryId = (JSON.parse(created.body).entry as { id: number }).id
+
+    const kept = await app.inject({ method: 'PUT', url: `/api/goals/${goalId}/entry/${entryId}`, payload: { content: 'без поля images' } })
+    expect(kept.statusCode).toBe(200)
+    expect((JSON.parse(kept.body).entry as { images: string[] }).images).toEqual([image])
+
+    const cleared = await app.inject({ method: 'PUT', url: `/api/goals/${goalId}/entry/${entryId}`, payload: { content: 'пусто', images: [] } })
+    expect(cleared.statusCode).toBe(200)
+    expect((JSON.parse(cleared.body).entry as { images: string[] }).images).toEqual([])
+  })
+
+  it('sends X-Content-Type-Options: nosniff on API responses', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/health' })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['x-content-type-options']).toBe('nosniff')
+  })
+
   it('closes a goal via POST /:id/close with an outcome', async () => {
     const { body } = await post({ metric: 'bankroll', targetUnits: 10_000 })
     const goalId = (body.goal as { id: number }).id
