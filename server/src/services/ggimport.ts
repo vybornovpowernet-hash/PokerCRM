@@ -152,14 +152,46 @@ export function parseGgFile(text: string, fallbackCurrency: string, dayStartHour
  * entries are opened recursively (bounded by MAX_ZIP_DEPTH). Pure parsing —
  * nothing is written to the database, failures are collected beside the parsed
  * rows so the caller can show a X-on-Y counter.
+ *
+ * A dropped .zip is untrusted input, so the archive is also bounded by
+ * MAX_ARCHIVE_FILES and MAX_UNCOMPRESSED_BYTES before anything is inflated: a
+ * few-KB zip bomb declares hundreds of MB in its header and would otherwise
+ * blow up memory on a single paste. Limits abort the whole import (400), unlike
+ * a single unreadable report which is only recorded as a failure.
  */
 const MAX_ZIP_DEPTH = 4
+const MAX_ARCHIVE_FILES = 1000
+const MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 
 interface GgArchiveContext {
   fallbackCurrency: string
   dayStartHour: number
   tournaments: ParsedGgTournament[]
   failed: GgImportFailure[]
+  entries: number
+  declaredBytes: number
+  actualBytes: number
+}
+
+function tooLargeError(): GgParseError {
+  return new GgParseError(`архив слишком большой после распаковки (лимит ${MAX_UNCOMPRESSED_BYTES / (1024 * 1024)} МБ)`)
+}
+
+function chargeEntry(entry: AdmZip.IZipEntry, ctx: GgArchiveContext): void {
+  ctx.entries += 1
+  if (ctx.entries > MAX_ARCHIVE_FILES) {
+    throw new GgParseError(`архив содержит слишком много файлов (лимит ${MAX_ARCHIVE_FILES})`)
+  }
+  ctx.declaredBytes += Math.max(0, entry.header.size)
+  if (ctx.declaredBytes > MAX_UNCOMPRESSED_BYTES) throw tooLargeError()
+}
+
+/** Declared header sizes can lie; re-check what was actually inflated. */
+function readEntry(entry: AdmZip.IZipEntry, ctx: GgArchiveContext): Buffer {
+  const data = entry.getData()
+  ctx.actualBytes += data.length
+  if (ctx.actualBytes > MAX_UNCOMPRESSED_BYTES) throw tooLargeError()
+  return data
 }
 
 function collectGgEntries(zip: AdmZip, prefix: string, depth: number, ctx: GgArchiveContext): number {
@@ -167,22 +199,36 @@ function collectGgEntries(zip: AdmZip, prefix: string, depth: number, ctx: GgArc
   for (const entry of zip.getEntries()) {
     if (entry.isDirectory) continue
     const name = prefix === '' ? entry.entryName : `${prefix}/${entry.entryName}`
+    chargeEntry(entry, ctx)
     if (/\.zip$/i.test(entry.entryName)) {
       if (depth + 1 >= MAX_ZIP_DEPTH) {
         ctx.failed.push({ fileName: name, error: `слишком глубокая вложенность архивов (лимит ${MAX_ZIP_DEPTH})` })
         continue
       }
+      let nested: AdmZip
       try {
-        totalTxtFiles += collectGgEntries(new AdmZip(entry.getData()), name, depth + 1, ctx)
-      } catch {
+        nested = new AdmZip(readEntry(entry, ctx))
+      } catch (e) {
+        // an exceeded limit must abort the import, a corrupt nested zip is just a failure
+        if (e instanceof GgParseError) throw e
         ctx.failed.push({ fileName: name, error: 'не удалось открыть вложенный архив' })
+        continue
       }
+      totalTxtFiles += collectGgEntries(nested, name, depth + 1, ctx)
       continue
     }
     if (!/\.txt$/i.test(entry.entryName)) continue
     totalTxtFiles += 1
+    let text: string
     try {
-      ctx.tournaments.push(parseGgFile(entry.getData().toString('utf8'), ctx.fallbackCurrency, ctx.dayStartHour))
+      text = readEntry(entry, ctx).toString('utf8')
+    } catch (e) {
+      if (e instanceof GgParseError) throw e
+      ctx.failed.push({ fileName: name, error: e instanceof Error ? e.message : String(e) })
+      continue
+    }
+    try {
+      ctx.tournaments.push(parseGgFile(text, ctx.fallbackCurrency, ctx.dayStartHour))
     } catch (e) {
       ctx.failed.push({ fileName: name, error: e instanceof Error ? e.message : String(e) })
     }
@@ -203,7 +249,7 @@ export function parseGgZipArchive(
     throw new GgParseError('архив не является zip-файлом')
   }
 
-  const ctx: GgArchiveContext = { fallbackCurrency, dayStartHour, tournaments: [], failed: [] }
+  const ctx: GgArchiveContext = { fallbackCurrency, dayStartHour, tournaments: [], failed: [], entries: 0, declaredBytes: 0, actualBytes: 0 }
   const totalTxtFiles = collectGgEntries(zip, '', 0, ctx)
   return { tournaments: ctx.tournaments, failed: ctx.failed, totalTxtFiles }
 }

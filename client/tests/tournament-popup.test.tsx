@@ -111,11 +111,12 @@ describe('TournamentPopup — PokerDom text-imported tournaments', () => {
     )
   })
 
-  it('skips re-pasted text ids that are already editable rows', async () => {
+  it('skips a re-parsed tournament already loaded as a row even when its id changed (32→53-bit)', async () => {
     mocks.list.mockResolvedValue([hashed({ tournamentId: 111, name: 'Same MTT' })])
     mocks.importPokerDom.mockResolvedValue({
       tournaments: [
-        { tournamentId: 111, name: 'Same MTT', date: '2026-09-16', buyin: 500_00, result: 128_805, rank: 13, entrants: null, currency: 'RUB' },
+        // same numbers, but the id algorithm changed: legacy id 111 → a wide id
+        { tournamentId: 900111, name: 'Same MTT', date: '2026-09-16', buyin: 500_00, result: 128_805, rank: 13, entrants: null, currency: 'RUB' },
         { tournamentId: 222, name: 'New MTT', date: '2026-09-16', buyin: 250_00, result: 0, rank: null, entrants: null, currency: 'RUB' }
       ],
       successfullyParsed: 2,
@@ -132,6 +133,27 @@ describe('TournamentPopup — PokerDom text-imported tournaments', () => {
     expect(await screen.findByText('New MTT')).toBeTruthy()
     expect(screen.queryByText('Same MTT')).toBeNull()
     expect(screen.getAllByText('2026-09-16')).toHaveLength(1)
+  })
+
+  it('skips a re-parsed tournament whose id still matches a loaded row', async () => {
+    mocks.list.mockResolvedValue([hashed({ tournamentId: 111, name: 'Same MTT' })])
+    mocks.importPokerDom.mockResolvedValue({
+      tournaments: [
+        { tournamentId: 111, name: 'Same MTT', date: '2026-09-16', buyin: 500_00, result: 128_805, rank: 13, entrants: null, currency: 'RUB' }
+      ],
+      successfullyParsed: 1,
+      failures: [],
+      totalSources: 1
+    })
+    const user = userEvent.setup()
+    renderPopup(pokerdom)
+
+    await waitFor(() => expect(shownForm('Бай-ин строки 1').value).toBe('500.00'))
+    await user.type(screen.getByPlaceholderText(/Вставьте текст отчёта PokerDom/), 'ignored')
+    await user.click(screen.getByRole('button', { name: 'Вставить и разобрать' }))
+
+    await waitFor(() => expect(mocks.importPokerDom).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText('Same MTT')).toBeNull()
   })
 })
 
@@ -198,6 +220,43 @@ describe('TournamentPopup — GG multi-archive upload', () => {
     await waitFor(() => expect(mocks.importGg).toHaveBeenCalledTimes(2))
     expect(await screen.findByText('Good MTT')).toBeTruthy()
     expect(screen.getByText(/b\.zip: Ошибка 501/)).toBeTruthy()
+  })
+
+  it('still allows saving the parsed rows when part of an archive failed', async () => {
+    mocks.list.mockResolvedValue([])
+    mocks.importGg.mockResolvedValueOnce({
+      tournaments: [ggResult(9, 'Partial MTT', { buyin: 10_00, result: 20_00 })],
+      successfullyParsed: 1,
+      failures: [{ source: 'broken.txt', error: 'не найдена строка "Buy-in:"' }],
+      totalSources: 2
+    })
+    mocks.save.mockResolvedValue({ rows: [], reconcile: null, days: [] })
+    const user = userEvent.setup()
+    renderPopup(gg)
+
+    const input = screen.getByLabelText('Выбрать архивы') as HTMLInputElement
+    await user.upload(input, [new File(['a'], 'partial.zip', { type: 'application/zip' })])
+
+    expect(await screen.findByText('Partial MTT')).toBeTruthy()
+    expect(screen.getByText(/Не удалось разобрать часть отчётов/)).toBeTruthy()
+    // the stop-cock must not fire: what was recognised is savable
+    const save = screen.getByRole('button', { name: 'Сохранить' }) as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    await user.click(save)
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(1))
+  })
+
+  it('blocks saving only when the archive has no report files at all', async () => {
+    mocks.list.mockResolvedValue([])
+    mocks.importGg.mockResolvedValueOnce({ tournaments: [], successfullyParsed: 0, failures: [], totalSources: 0 })
+    const user = userEvent.setup()
+    renderPopup(gg)
+
+    const input = screen.getByLabelText('Выбрать архивы') as HTMLInputElement
+    await user.upload(input, [new File(['a'], 'empty.zip', { type: 'application/zip' })])
+
+    expect(await screen.findByText(/нет файлов отчётов/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Сохранить' }) as HTMLButtonElement).disabled).toBe(true)
   })
 })
 

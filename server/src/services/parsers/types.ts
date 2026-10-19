@@ -38,6 +38,8 @@ export interface TournamentParserContext {
   fallbackCurrency: string
   /** Logical Day Boundary hour (0..12); parsers may shift a pre-dawn start to the previous day. */
   dayStartHour?: number
+  /** Current server day (YYYY-MM-DD); used by parsers whose reports carry no year. */
+  today?: string
 }
 
 export interface ITournamentParser {

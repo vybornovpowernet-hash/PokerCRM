@@ -59,11 +59,21 @@ const toImportEntry = (r: { tournamentId: number; name: string | null; date: str
 
 const toRow = (buyin: number, result: number): RowDraft => ({ id: crypto.randomUUID(), buyin: formatUnits(buyin), result: formatUnits(result) })
 
+/**
+ * Content identity of an imported tournament. Rows loaded from the DB carry the
+ * id they were stored with, and the PokerDom id algorithm changed (32-bit → 53-bit),
+ * so a freshly parsed report no longer matches them by id — the numbers still do.
+ * Used to keep an already-loaded tournament from being added a second time.
+ */
+const naturalKey = (t: { date: string; name: string | null; buyin: number; result: number; rank: number | null }): string =>
+  [t.date, t.name ?? '', t.buyin, t.result, t.rank ?? ''].join('|')
+
 export function TournamentPopup({ open, room, date, onClose, onChanged }: Props) {
   const [rows, setRows] = useState<RowDraft[]>([])
   const [imports, setImports] = useState<TournamentImportEntry[]>([])
   const [savedImportIds, setSavedImportIds] = useState<number[]>([])
   const [removedImportIds, setRemovedImportIds] = useState<number[]>([])
+  const [savedImportKeys, setSavedImportKeys] = useState<string[]>([])
   const [archiveStats, setArchiveStats] = useState<ArchiveStats[]>([])
   const [textDraft, setTextDraft] = useState<string>('')
   const [textErrors, setTextErrors] = useState<TournamentImportFailure[]>([])
@@ -96,6 +106,7 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
     setImports([])
     setSavedImportIds([])
     setRemovedImportIds([])
+    setSavedImportKeys([])
     setArchiveStats([])
     setTextDraft('')
     setTextErrors([])
@@ -112,6 +123,7 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
           if (manual.length > 0 || imported.length > 0) {
             setRows([...manual.map((r) => toRow(r.buyin, r.result)), ...imported.map((r) => toRow(r.buyin, r.result)), emptyRow()])
             setRemovedImportIds(imported.map((r) => r.tournamentId))
+            setSavedImportKeys(imported.map(naturalKey))
           }
           return
         }
@@ -172,8 +184,11 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
           parsed: archiveStats.reduce((sum, a) => sum + a.parsed, 0),
           failed: archiveStats.flatMap((a) => a.failed)
         }
-  const importHasFormatFailure = archiveStats.some((a) => a.parsed < a.total)
-  const importBlocked = archiveStats.some((a) => a.total === 0 || a.parsed < a.total || a.failed.length > 0)
+  // The archive stop-cock only fires when there is genuinely nothing to save:
+  // a partially parsed archive (or one with unreadable files) still keeps the
+  // recognised tournaments, so the user may save them — the losses are reported.
+  const importHasFailures = archiveStats.some((a) => a.parsed < a.total || a.failed.length > 0)
+  const importBlocked = archiveStats.some((a) => a.total === 0)
 
   async function handleFiles(files: File[]) {
     if (files.length === 0) return
@@ -240,9 +255,10 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
         return
       }
       const skip = new Set(removedImportIds)
+      const skipKeys = new Set(savedImportKeys)
       setImports((prev) => {
         const seen = new Set(prev.map((t) => t.tournamentId))
-        return [...prev, ...res.tournaments.filter((t) => !seen.has(t.tournamentId) && !skip.has(t.tournamentId))]
+        return [...prev, ...res.tournaments.filter((t) => !seen.has(t.tournamentId) && !skip.has(t.tournamentId) && !skipKeys.has(naturalKey(t)))]
       })
       setTextErrors(res.failures)
     } catch (e) {
@@ -447,16 +463,16 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
             <div className="mt-3 text-sm">
               {importBlocked ? (
                 <p className="rounded-lg border border-red-900 bg-red-950/40 px-3 py-2 text-red-300">
-                  {importHasFormatFailure
-                    ? `Формат отчетов не совпадает (распарсено ${importStats.parsed} из ${importStats.total} файлов). Возможно, в архиве есть турниры с Re-entry или структура изменена!`
-                    : importStats.failed.length > 0
-                      ? `Не удалось прочитать часть вложенных архивов (${importStats.failed.length}).`
-                      : 'В архиве нет файлов отчётов (.txt).'}
+                  В архиве нет файлов отчётов (.txt) — сохранять нечего.
+                </p>
+              ) : importHasFailures ? (
+                <p className="rounded-lg border border-amber-900 bg-amber-950/40 px-3 py-2 text-amber-300">
+                  Не удалось разобрать часть отчётов — сохранены будут распознанные турниры ({importStats.parsed}). Остальные пропускаются, список ошибок ниже.
                 </p>
               ) : (
                 <p className="text-emerald-300">Разобрано турниров: {importStats.parsed} из {importStats.total} файлов.</p>
               )}
-              {importBlocked && importStats.failed.length > 0 && (
+              {importStats.failed.length > 0 && (
                 <ul className="mt-1 space-y-0.5 text-xs text-red-400/80">
                   {importStats.failed.map((f) => (
                     <li key={`${f.source}-${f.error}`}>
@@ -581,7 +597,7 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
           <button
             onClick={save}
             disabled={busy || importBusy || textBusy || importBlocked}
-            title={importBlocked ? 'Импорт не разобран — сначала исправь формат' : undefined}
+            title={importBlocked ? 'В архиве нет файлов отчётов (.txt) — сохранять нечего' : importHasFailures ? 'Часть отчётов не разобрана — сохранятся распознанные турниры' : undefined}
             className="flex-1 rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 transition hover:bg-white disabled:opacity-40"
           >
             Сохранить

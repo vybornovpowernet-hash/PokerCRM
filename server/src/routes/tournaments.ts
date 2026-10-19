@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { HttpError } from '../lib/errors.js'
-import { isValidDayKey } from '../lib/date.js'
+import { isValidDayKey, dayKey } from '../lib/date.js'
 import { parseId } from '../lib/http.js'
 import {
   adjustBalanceToTournaments,
@@ -89,7 +89,7 @@ export async function tournamentsRoutes(app: FastifyInstance): Promise<void> {
 
     try {
       const dayStartHour = getDayStartHour()
-      const result = parser.parse(input, { roomId: room.id, fallbackCurrency: room.tournamentCurrency, dayStartHour })
+      const result = parser.parse(input, { roomId: room.id, fallbackCurrency: room.tournamentCurrency, dayStartHour, today: dayKey() })
       return {
         tournaments: result.tournaments,
         successfullyParsed: result.successfullyParsed,

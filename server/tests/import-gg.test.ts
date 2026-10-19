@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AdmZip from 'adm-zip'
 import { createApp } from '../src/app.js'
 import type { FastifyInstance } from 'fastify'
@@ -331,7 +331,13 @@ describe('POST /api/tournaments/import/:roomId (PokerDom)', () => {
 
   let pdom: number
   beforeEach(() => {
+    // PokerDom reports carry no year: pin the clock so the resolved dates below stay deterministic
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-19T12:00:00') })
     pdom = createRoom({ name: 'PokerDom', cashCurrency: 'RUB', tournamentCurrency: 'RUB' }).id
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   async function postPokerdom(text: string, roomId: number = pdom) {
@@ -526,5 +532,47 @@ describe('GET /api/tournaments/summary', () => {
       blank: null,
       breakdown: [{ buyin: 1_00, count: 1, profit: 4_50, roi: 450, avgPosition: null }]
     })
+  })
+})
+
+/** Local (0x04034b50) and central-directory (0x02014b50) uncompressed-size offsets. */
+const ZIP_SIZE_FIELDS: { sig: number[]; offset: number }[] = [
+  { sig: [0x50, 0x4b, 0x03, 0x04], offset: 22 },
+  { sig: [0x50, 0x4b, 0x01, 0x02], offset: 24 }
+]
+
+/** Rewrites the declared uncompressed size — a smallest-possible zip bomb. */
+function forgeUncompressedSize(zip: Buffer, size: number): Buffer {
+  const buf = Buffer.from(zip)
+  for (const { sig, offset } of ZIP_SIZE_FIELDS) {
+    const at = buf.indexOf(Buffer.from(sig))
+    if (at < 0) throw new Error('zip signature not found')
+    buf.writeUInt32LE(size, at + offset)
+  }
+  return buf
+}
+
+describe('POST /api/tournaments/import/:roomId (GG) — archive guards', () => {
+  it('400s on a zip bomb instead of inflating it', async () => {
+    const bomb = forgeUncompressedSize(makeZip({ 'bomb.txt': 'x' }), 200 * 1024 * 1024)
+    const { statusCode, body } = await postZip(ggroom, bomb)
+    expect(statusCode).toBe(400)
+    expect(body.error as string).toContain('слишком большой')
+  })
+
+  it('400s on an archive with too many entries', async () => {
+    const files: Record<string, string> = {}
+    for (let i = 0; i <= 1000; i++) files[`report-${i}.txt`] = 'x'
+    const { statusCode, body } = await postZip(ggroom, makeZip(files))
+    expect(statusCode).toBe(400)
+    expect(body.error as string).toContain('слишком много файлов')
+  })
+
+  it('rejects a bomb nested in a day archive instead of recording it as a mere failure', async () => {
+    const inner = forgeUncompressedSize(makeZip({ 'inner.txt': 'x' }), 200 * 1024 * 1024)
+    const outer = makeZip({ 'day1.zip': inner, 'ok.txt': reportText(404) })
+    const { statusCode, body } = await postZip(ggroom, outer)
+    expect(statusCode).toBe(400)
+    expect(body.error as string).toContain('слишком большой')
   })
 })

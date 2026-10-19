@@ -1,5 +1,15 @@
-import { describe, expect, it } from 'vitest'
-import { parsePokerDomText, PokerDomParseError } from '../src/services/pokerdomimport.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { numericHash, parsePokerDomText, PokerDomParseError } from '../src/services/pokerdomimport.js'
+
+// Report dates carry no year, so the parser resolves it from the current server
+// day; pin the clock to keep the fixtures below deterministic.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-19T12:00:00') })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 const REPORT = [
   '16 сент., 14:00',
@@ -234,5 +244,81 @@ describe('Logical Day Boundary (dayStartHour), same rule as the GG parser', () =
     const shifted = parsePokerDomText(NIGHT, 'RUB', 7).tournaments[0]!
     expect(shifted.tournamentId).toBe(unshifted.tournamentId)
     expect(shifted.date).not.toBe(unshifted.date)
+  })
+})
+
+describe('report year resolution (report dates carry no year)', () => {
+  const JANUARY = ['01 янв., 12:00', 'Новогодний 10 000 р.', 'БЛ Холдем', '100 р.', '100 р.\t5\t500 р.'].join('\n')
+  const DECEMBER = ['31 дек., 22:00', 'Новогодний 10 000 р.', 'БЛ Холдем', '100 р.', '100 р.\t5\t500 р.'].join('\n')
+
+  it('uses the current year for a date that is not in the future', () => {
+    const { tournaments, failed } = parsePokerDomText(JANUARY, 'RUB', 0, '2027-01-01')
+    expect(failed).toEqual([])
+    expect(tournaments[0]!.date).toBe('2027-01-01')
+  })
+
+  it('rolls a still-future date back one year (31 дек. imported on 1 января)', () => {
+    const { tournaments, failed } = parsePokerDomText(DECEMBER, 'RUB', 0, '2027-01-01')
+    expect(failed).toEqual([])
+    expect(tournaments[0]!.date).toBe('2026-12-31')
+  })
+
+  it('keeps the current year once that day has already arrived', () => {
+    const { tournaments } = parsePokerDomText(DECEMBER, 'RUB', 0, '2027-12-31')
+    expect(tournaments[0]!.date).toBe('2027-12-31')
+  })
+})
+
+describe('date validation and time extraction', () => {
+  it('rejects an impossible calendar date as a block failure, keeping the rest', () => {
+    const text = [
+      '16 сент., 14:00',
+      'Хороший турнир 10 000 р.',
+      'БЛ Холдем',
+      '250 р.',
+      '250 р.\t7\t700 р.',
+      '',
+      '31 апр., 12:00',
+      'Невозможный турнир 10 000 р.',
+      'БЛ Холдем',
+      '250 р.',
+      '250 р.\t5\t500 р.'
+    ].join('\n')
+    const { tournaments, failed } = parsePokerDomText(text, 'RUB', 0, '2026-10-19')
+    expect(tournaments).toHaveLength(1)
+    expect(failed).toHaveLength(1)
+    expect(failed[0]!.error).toContain('дата')
+  })
+
+  it('reads a single-digit hour and applies the day boundary to it', () => {
+    const text = ['5 окт., 4:00', 'Ранний турнир 10 000 р.', 'БЛ Холдем', '100 р.', '100 р.\t5\t500 р.'].join('\n')
+    const { tournaments, failed } = parsePokerDomText(text, 'RUB', 7, '2026-10-19')
+    expect(failed).toEqual([])
+    expect(tournaments[0]!.date).toBe('2026-10-04')
+  })
+})
+
+describe('tournament id space', () => {
+  it('stays a positive safe integer and collision-free over a large sample', () => {
+    const ids = Array.from({ length: 20_000 }, (_, i) => numericHash(`Турнир ${i}|2026-09-16 14:00|50000`))
+    expect(ids.every((id) => Number.isSafeInteger(id) && id > 0)).toBe(true)
+    expect(new Set(ids).size).toBe(ids.length)
+    // the legacy hash returned Math.abs(int32) — never above 2^32
+    expect(ids.some((id) => id > 0xffffffff)).toBe(true)
+  })
+
+  it('separates two report keys the legacy 32-bit hash merged into one id', () => {
+    // Both keys below hash to 951582727 under the old algorithm, and the import
+    // upserts on UNIQUE(room_id, tournament_id) — so a collision silently
+    // overwrote an unrelated tournament.
+    const legacyHash = (s: string): number => {
+      let h = 0
+      for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
+      return Math.abs(h)
+    }
+    const a = 'Сателлит Зодиак 66000 р.|2026-09-11 09:49|49200'
+    const b = 'Гарантия Дейли 21000 р.|2024-01-06 11:17|126400'
+    expect(legacyHash(a)).toBe(legacyHash(b))
+    expect(numericHash(a)).not.toBe(numericHash(b))
   })
 })
