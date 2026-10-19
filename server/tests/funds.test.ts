@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { initDb, resetDbForTests, setDbForTests } from '../src/db.js'
-import { createRoom } from '../src/services/rooms.js'
+import { createRoom, deleteRoom } from '../src/services/rooms.js'
+import { getBalance } from '../src/services/balances.js'
 import { upsertRate } from '../src/services/rates/storage.js'
 import {
   createTransaction,
@@ -97,6 +98,22 @@ describe('transactions', () => {
     expect(t.direction).toBe('out')
     expect(t.destinationRoomId).toBe(destRoomId)
     expect(t.destinationRoomName).toBe('RedStar')
+  })
+
+  it('keeps the sender ledger row (and its outflow) when the destination room is deleted', () => {
+    const t = createTransaction(tx({ type: 'transfer', amount: 20_00, fee: 1_00, destinationRoomId: destRoomId, date: '2026-09-09' }))
+    deleteRoom(destRoomId)
+
+    // the row survives in the sender's history, it only loses its recipient
+    const kept = getTransaction(t.id)
+    expect(kept.type).toBe('transfer')
+    expect(kept.amount).toBe(20_00)
+    expect(kept.fee).toBe(1_00)
+    expect(kept.destinationRoomId).toBeNull()
+    expect(kept.destinationRoomName).toBeNull()
+
+    // the money left the sender: −(20 + 1) still stands on the balance chain
+    expect(getBalance(roomId, '2026-09-09')?.amount).toBe(-21_00)
   })
 
   it('lists, filters and updates', () => {

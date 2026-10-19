@@ -489,6 +489,38 @@ const MIGRATIONS: string[] = [
   DROP TABLE habit_logs_v27;
   CREATE INDEX idx_habit_logs_date ON habit_logs(date);
   `,
+  // v29: deleting a destination room must not erase the SENDER's ledger row.
+  // `destination_room_id` was ON DELETE CASCADE, so removing room A deleted every
+  // transfer B → A straight out of B's history: B's flows lost the outflow and
+  // the next recompute silently moved B's balances. A transfer whose recipient
+  // is gone is an ordinary outflow of the sender (the money left), so the
+  // reference is now ON DELETE SET NULL. SQLite cannot change an FK action in
+  // place, so `transactions` is rebuilt; `idx_transactions_destination` backs the
+  // receiving-leg lookups (`destination_room_id = ?`) and the SET NULL scan that
+  // runs on every room deletion.
+  `
+  CREATE TABLE transactions_v29 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('deposit', 'withdraw', 'transfer', 'casino')),
+    amount INTEGER NOT NULL CHECK ((type = 'casino' AND amount <> 0) OR (type <> 'casino' AND amount > 0)),
+    fee INTEGER NOT NULL DEFAULT 0 CHECK (fee >= 0),
+    currency TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+    counterpart TEXT,
+    destination_room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
+    date TEXT NOT NULL,
+    comment TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (type <> 'casino' OR fee = 0)
+  );
+  INSERT INTO transactions_v29 (id, room_id, type, amount, fee, currency, direction, counterpart, destination_room_id, date, comment, created_at)
+    SELECT id, room_id, type, amount, fee, currency, direction, counterpart, destination_room_id, date, comment, created_at FROM transactions;
+  DROP TABLE transactions;
+  ALTER TABLE transactions_v29 RENAME TO transactions;
+  CREATE INDEX idx_transactions_room_date ON transactions(room_id, date);
+  CREATE INDEX idx_transactions_destination ON transactions(destination_room_id);
+  `,
 ]
 
 let dbInstance: DatabaseSync | undefined
@@ -553,11 +585,40 @@ export function withTransaction<T>(fn: () => T): T {
     }
     return result
   } catch (err) {
-    if (transactionDepth === 1) {
-      db.exec('ROLLBACK')
-    } else {
-      db.exec(`ROLLBACK TO ${name}`)
-      db.exec(`RELEASE ${name}`)
+    try {
+      if (transactionDepth === 1) {
+        db.exec('ROLLBACK')
+      } else {
+        db.exec(`ROLLBACK TO ${name}`)
+        db.exec(`RELEASE ${name}`)
+      }
+    } catch (rollbackErr) {
+      // `ROLLBACK TO` keeps the savepoint alive and only `RELEASE` destroys it,
+      // so a failure here can leave a stale savepoint behind: a later nested
+      // `ROLLBACK TO tx_<depth>` would rewind PAST sibling writes of the outer
+      // transaction and silently discard them. Retry the whole pair once — the
+      // second `ROLLBACK TO` is a no-op when the first one already succeeded.
+      let recovered = false
+      try {
+        if (transactionDepth === 1) {
+          db.exec('ROLLBACK')
+        } else {
+          db.exec(`ROLLBACK TO ${name}; RELEASE ${name}`)
+        }
+        recovered = true
+      } catch {
+        // the connection refuses to unwind: it is in an unknown transactional
+        // state and must not be trusted with further writes
+      }
+      if (!recovered) {
+        // the original error explains WHY the transaction broke, so it stays
+        // readable in the message instead of being masked by the rollback
+        // failure, which is the `cause` here (the actionable symptom)
+        throw new Error(
+          `withTransaction: transaction broke with ${String(err)} and could not be rolled back (${String(rollbackErr)}) — savepoint ${name} may still be open; restart the app`,
+          { cause: rollbackErr }
+        )
+      }
     }
     throw err
   } finally {
