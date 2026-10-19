@@ -285,7 +285,8 @@ describe('updateScriptContents', () => {
   const { bat, sh } = updateScriptContents()
 
   it('kills the old server by PID on Windows without mass deletion', () => {
-    expect(bat).toContain('taskkill /F /PID %~1 /T')
+    expect(bat).toContain('taskkill /F /PID %~1')
+    expect(bat).not.toMatch(/taskkill[^\r\n]*\/T\b/)
     expect(bat).toContain('xcopy')
     expect(bat).toContain('call "start.bat"')
     expect(bat).toContain('".env"')
@@ -301,5 +302,23 @@ describe('updateScriptContents', () => {
     expect(sh).not.toContain('--delete')
     expect(sh).not.toMatch(/rm -rf \*/)
     expect(sh).toContain('sh ./start.sh')
+  })
+})
+
+describe('cross-platform production start', () => {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    scripts?: Record<string, string>
+  }
+
+  it('does not use a POSIX inline env assignment in npm start (breaks in cmd.exe)', () => {
+    const start = pkg.scripts?.start ?? ''
+    expect(start).not.toMatch(/^[A-Za-z_][A-Za-z0-9_]*=/)
+    expect(start).toBe('node scripts/start.mjs')
+  })
+
+  it('launches the built server with NODE_ENV=production from a portable shim', () => {
+    const shim = readFileSync(new URL('../scripts/start.mjs', import.meta.url), 'utf8')
+    expect(shim).toContain("process.env.NODE_ENV = 'production'")
+    expect(shim).toContain("await import('../dist/index.js')")
   })
 })

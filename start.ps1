@@ -173,15 +173,18 @@ if ($Background) {
 
 $apiUp, $webUp = Get-ServiceStatus
 
-if (-not $apiUp -and -not $webUp) {
-  Write-Host 'Poker CRM: сервисы не запущены — стартую в фоне.'
-  Start-And-Open
-} else {
-  $apiState = if ($apiUp) { 'работает' } else { 'остановлен' }
-  $webState = if ($webUp) { 'работает' } else { 'остановлен' }
+if ($apiUp -and $webUp) {
   Write-Host 'Poker CRM: сервисы уже запущены'
-  Write-Host "  API $apiUrl — $apiState"
-  Write-Host "  UI  $webUrl — $webState"
+  Write-Host "  API $apiUrl — работает"
+  Write-Host "  UI  $webUrl — работает"
+} else {
+  if ($apiUp -or $webUp) {
+    Write-Host 'Poker CRM: часть сервисов недоступна — перезапускаю оба.'
+    Stop-Services
+  } else {
+    Write-Host 'Poker CRM: сервисы не запущены — стартую в фоне.'
+  }
+  Start-And-Open
 }
 
 Show-Menu
