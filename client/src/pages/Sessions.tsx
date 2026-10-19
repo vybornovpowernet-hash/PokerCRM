@@ -181,8 +181,8 @@ export default function SessionsPage() {
                       <div className="mt-0.5 text-xs tabular-nums text-rose-400/80">↳ Казино: −{formatAmount(Math.abs(r.casinoUsd), 'USD')}</div>
                     )}
                   </div>
-                  <div className={`${deltaCellCls} tabular-nums ${r.convertible ? 'text-slate-300' : 'text-amber-400/80'}`}>
-                    {r.convertible ? formatAmount(r.delta, r.currency) : 'нет курса'}
+                  <div className={`${deltaCellCls} tabular-nums ${r.convertible && r.delta !== null ? 'text-slate-300' : 'text-amber-400/80'}`}>
+                    {r.convertible && r.delta !== null ? formatAmount(r.delta, r.currency) : 'нет курса'}
                   </div>
                   <div className={`${profitCellCls} font-medium tabular-nums ${r.pokerProfitUsd != null ? (r.pokerProfitUsd < 0 ? 'text-red-400' : 'text-emerald-400') : 'text-slate-600'}`}>
                     {r.pokerProfitUsd != null ? `${r.pokerProfitUsd < 0 ? '−' : '+'}${formatAmount(Math.abs(r.pokerProfitUsd), 'USD')}` : '—'}

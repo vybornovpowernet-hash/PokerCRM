@@ -48,8 +48,8 @@ describe('rate conversion', () => {
   it('converts CNY via the direct USD→CNY cross without the ruble', () => {
     expect(crossRateScaled('USD', 'CNY', '2026-09-09')).toBe(73_000)
     expect(resolveCrossScaled('CNY', 'USD', '2026-09-09')).toBe(Math.round((RATE_SCALE * RATE_SCALE) / 73_000))
-    // ¥11.00 = 1100 min units → ~ $1.51
-    expect(convertToUsd(11_00, 'CNY', '2026-09-09')).toBe(Math.round((1100 * Math.round((RATE_SCALE * RATE_SCALE) / 73_000)) / RATE_SCALE))
+    // ¥11.00 = 1100 min units → round(1100 * 10000 / 73000) = 151
+    expect(convertToUsd(11_00, 'CNY', '2026-09-09')).toBe(151)
   })
 
   it('prefers a manual per-room override over the frozen feed rate', () => {
@@ -68,12 +68,8 @@ describe('rate conversion', () => {
     const other = createRoom({ name: 'Bybit', cashCurrency: 'USD', tournamentCurrency: 'USD' })
     setRateOverride(room.id, 'USD', 'CNY', 70_000)
 
-    expect(convertToUsd(11_00, 'CNY', '2026-09-09')).toBe(
-      Math.round((1100 * Math.round((RATE_SCALE * RATE_SCALE) / 73_000)) / RATE_SCALE)
-    )
-    expect(convertToUsd(11_00, 'CNY', '2026-09-09', other.id)).toBe(
-      Math.round((1100 * Math.round((RATE_SCALE * RATE_SCALE) / 73_000)) / RATE_SCALE)
-    )
+    expect(convertToUsd(11_00, 'CNY', '2026-09-09')).toBe(151)
+    expect(convertToUsd(11_00, 'CNY', '2026-09-09', other.id)).toBe(151)
   })
 
   it('removes the manual override again on delete, falling back to the feed', () => {
@@ -82,9 +78,7 @@ describe('rate conversion', () => {
     deleteRateOverride(room.id, 'USD', 'CNY')
 
     expect(resolveCrossScaled('USD', 'CNY', '2026-09-09', room.id)).toBe(73_000)
-    expect(convertToUsd(11_00, 'CNY', '2026-09-09', room.id)).toBe(
-      Math.round((1100 * Math.round((RATE_SCALE * RATE_SCALE) / 73_000)) / RATE_SCALE)
-    )
+    expect(convertToUsd(11_00, 'CNY', '2026-09-09', room.id)).toBe(151)
   })
 
   it('honours an override stored in the reverse direction too', () => {
@@ -94,18 +88,31 @@ describe('rate conversion', () => {
     expect(resolveCrossScaled('USD', 'CNY', '2026-09-09', room.id)).toBe(Math.round((RATE_SCALE * RATE_SCALE) / Math.round(RATE_SCALE / 7.3)))
   })
 
+  it('inverts the stored forward rate at the amount level (no double rounding)', () => {
+    // 90 000 kopecks = 900 ₽. At 90 ₽/USD that is exactly $10.00 = 1000 cents.
+    // Inverting the *rate* first (round(1e8/900000) = 111) used to give 999.
+    expect(convertToUsd(90_000, 'RUB', '2026-09-09')).toBe(1000)
+  })
+
+  it('keeps the full feed precision on large RUB amounts', () => {
+    upsertRate('2026-09-10', 'USD', 'RUB', 893_936, 'pokerdom') // 89.3936
+    // 1 000 000 ₽ = 1e8 kopecks → round(1e8 * 1e4 / 893936) = 1 118 648 cents.
+    // Pre-rounding the inverse rate to 112 produced 1 120 000 (+$13.52).
+    expect(convertToUsd(100_000_000, 'RUB', '2026-09-10')).toBe(1_118_648)
+  })
+
   it('withRateCache memoizes resolved rates for the duration of a synchronous scope', () => {
-    // 90000 min RUB at USD→RUB 90 → ~999 min USD
-    expect(convertToUsd(90_000, 'RUB', '2026-09-09')).toBe(999)
+    // 90000 min RUB at USD→RUB 90 → exactly 1000 min USD
+    expect(convertToUsd(90_000, 'RUB', '2026-09-09')).toBe(1000)
 
     let during: number | null = null
     withRateCache(() => {
       convertToUsd(90_000, 'RUB', '2026-09-09') // prime the cache
       upsertRate('2026-09-09', 'USD', 'RUB', 1_000_000, 'pokerdom') // feed moves to 100
-      during = convertToUsd(90_000, 'RUB', '2026-09-09') // still the cached 90 → 999
+      during = convertToUsd(90_000, 'RUB', '2026-09-09') // still the cached 90 → 1000
     })
 
-    expect(during).toBe(999)
+    expect(during).toBe(1000)
     // once the scope ends the cache is gone and the new rate applies
     expect(convertToUsd(90_000, 'RUB', '2026-09-09')).toBe(900)
   })

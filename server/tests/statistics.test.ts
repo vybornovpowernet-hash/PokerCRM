@@ -339,8 +339,8 @@ describe('tournamentSummary', () => {
     expect(group).toMatchObject({ count: 2 })
     // buyin 250 RUB ×2 @ 90 → $5.55; profit (0 − 250) + (400 − 250) = −100 RUB → −$1.11
     expect(group?.totalBuyinUsd).toBe(Math.round((2 * 250_00 * 10_000 * 10_000) / (90 * 10_000) / 10_000))
-    // per-row rounding: −25000 → −$2.78, +15000 → +$1.67 → −$1.10 total
-    expect(group?.totalProfitUsd).toBe(-110)
+    // per-row rounding: −25000 → −$2.78, +15000 → +$1.67 → −$1.11 total
+    expect(group?.totalProfitUsd).toBe(-111)
     expect(group?.bestRank).toBeNull()
     expect(group?.avgEntrants).toBeNull()
   })

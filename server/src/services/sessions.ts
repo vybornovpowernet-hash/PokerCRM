@@ -13,7 +13,9 @@ export interface RoomProfit {
    *  ('manual') or an interpolated carry-forward ('auto'). Reconciliation can
    *  only be trusted for 'manual' — see `computeReconcile`. */
   source: 'manual' | 'auto'
-  delta: number
+  /** `null` when the previous balance could not be converted into this entry's
+   *  currency: the delta would mix units, so the day is not reconcilable. */
+  delta: number | null
   flowInUsd: number
   flowOutUsd: number
   /** Balance-based session result: `delta − (in − out)`. Casino P&L is part
@@ -41,18 +43,19 @@ const EMPTY_FLOW: CashFlow = { inUsd: 0, outUsd: 0, convertible: true }
 /** Day profit of one room from an already-fetched previous balance and flows. */
 function buildRoomProfit(entry: BalanceEntry, prev: BalanceEntry | null, flows: CashFlow, casinoUsd: number): RoomProfit {
   let prevAmount = prev ? prev.amount : 0
+  let prevResolved = true
   if (prev && prev.currency !== entry.currency) {
     const converted = convertCross(prev.amount, prev.currency, entry.currency, entry.date, entry.roomId)
     if (converted === null) {
-      prevAmount = prev.amount
+      prevResolved = false
     } else {
       prevAmount = converted
     }
   }
-  const delta = entry.amount - prevAmount
-  const deltaUsd = convertToUsd(delta, entry.currency, entry.date, entry.roomId)
+  const delta = prevResolved ? entry.amount - prevAmount : null
+  const deltaUsd = delta === null ? null : convertToUsd(delta, entry.currency, entry.date, entry.roomId)
   const convertible = deltaUsd !== null && flows.convertible
-  const profitUsd = convertible ? deltaUsd - (flows.inUsd - flows.outUsd) : null
+  const profitUsd = convertible ? (deltaUsd as number) - (flows.inUsd - flows.outUsd) : null
   return {
     roomId: entry.roomId,
     roomName: entry.roomName,

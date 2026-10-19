@@ -136,7 +136,7 @@ export interface RoomProfit {
   roomId: number
   roomName: string
   currency: string
-  delta: number
+  delta: number | null
   flowInUsd: number
   flowOutUsd: number
   profitUsd: number | null

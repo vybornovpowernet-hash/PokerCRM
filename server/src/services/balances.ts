@@ -312,6 +312,10 @@ function transactionEffect(
  * Auto entries are deliberately not shifted: when the transaction has no
  * same-day manual anchor the derived chain already reflects it, and shifting
  * would double count.
+ *
+ * A manual anchor that cannot be converted is a hard error: silently skipping
+ * the shift would drop the operation from the day's session (`profit = delta −
+ * flows`), i.e. report a profit that never happened.
  */
 export function shiftManualBalanceOnDay(roomId: number, date: string, effectUnits: number, currency: string): void {
   if (effectUnits === 0) return
@@ -321,7 +325,7 @@ export function shiftManualBalanceOnDay(roomId: number, date: string, effectUnit
     .get(roomId, date) as { currency: string } | undefined
   if (!row) return
   const converted = convertCross(effectUnits, currency, row.currency, date, roomId)
-  if (converted === null) return
+  if (converted === null) throw new Error(`Курс не найден: ${currency}→${row.currency} на ${date}`)
   db.prepare("UPDATE balance_entries SET amount = amount + ? WHERE room_id = ? AND date = ? AND source = 'manual'").run(
     converted,
     roomId,
