@@ -1,6 +1,6 @@
 import { getDb } from '../db.js'
 import { HttpError } from '../lib/errors.js'
-import { isValidDayKey } from '../lib/date.js'
+import { addDays, isValidDayKey, monthEnd } from '../lib/date.js'
 import { convertToUsd, withRateCache } from './rates/convert.js'
 import { scopeClause, type MbrScope } from './tournamentScope.js'
 
@@ -21,14 +21,44 @@ export interface CalendarDay {
   profitUsd: number | null
 }
 
-export interface ActivityCalendar {
+/** One month bucket of the long-range activity view (`YYYY-MM` + its totals). */
+export interface ActivityMonthCount {
+  month: string
+  count: number
+  profitUsd: number | null
+}
+
+/** One month of the classic calendar grid: every day of the month, empty days included. */
+export interface ActivityMonthGrid {
   year: number
   month: number
+  days: CalendarDay[]
+}
+
+interface ActivityTotals {
+  dateFrom: string
+  dateTo: string
   totalCount: number
   totalProfitUsd: number
   blank: string | null
-  days: CalendarDay[]
 }
+
+/**
+ * Short period → classic calendar: whole month(s) the period touches, with every
+ * day rendered (a filter never shrinks the grid to a single cell).
+ */
+export interface ActivityViewCalendar extends ActivityTotals {
+  mode: 'calendar'
+  months: ActivityMonthGrid[]
+}
+
+/** Long period (> 3 months) → one cell per month. */
+export interface ActivityViewMonths extends ActivityTotals {
+  mode: 'months'
+  months: ActivityMonthCount[]
+}
+
+export type ActivityView = ActivityViewCalendar | ActivityViewMonths
 
 interface TournamentDb {
   id: number
@@ -87,26 +117,73 @@ export function tournamentTimeline(): TimelinePoint[] {
   })
 }
 
-function daysInMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate()
+/**
+ * A quarter is at most 92 days; anything longer switches to one cell per month
+ * («За год» and any custom period > 3 months).
+ */
+const MONTHLY_VIEW_MIN_DAYS = 92
+
+function diffDays(from: string, to: string): number {
+  const [y1, m1, d1] = from.split('-').map(Number) as [number, number, number]
+  const [y2, m2, d2] = to.split('-').map(Number) as [number, number, number]
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86_400_000)
 }
 
-/** Tournament activity per day of a month. Counts = rows (blank 0/0 never stored).
- *  The whole poker scope (MTT + MBR): the calendar is a pure-poker block, so its
- *  daily profit is the day's tournament profit and its totals match the KPI row. */
-export function activityCalendar(year: number, month: number): ActivityCalendar {
-  if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new HttpError(400, 'year: out of range')
-  if (!Number.isInteger(month) || month < 1 || month > 12) throw new HttpError(400, 'month: 1..12 expected')
+function nextMonthKey(month: string): string {
+  return addDays(monthEnd(month), 1).slice(0, 7)
+}
+
+interface ActivityRow {
+  date: string
+  room_id: number
+  buyin: number
+  result: number
+  currency: string
+}
+
+/**
+ * Tournament activity, honouring the page filters (date range + rooms).
+ * Counts = rows (blank 0/0 never stored). The whole poker scope (MTT + MBR): the
+ * calendar is a pure-poker block, so its totals match the KPI row's arithmetic.
+ *
+ * The widget has exactly two shapes and the server decides which one applies —
+ * the aggregation is data, not drawing:
+ *  - `calendar` (period ≤ 3 months): the full month grid(s) the period touches.
+ *    «За день»/«За неделю» do not shrink the widget to one cell: a calendar that
+ *    shows one day is not a calendar. A week straddling two months renders both.
+ *  - `months` (period > 3 months): one cell per month, for «За год» and beyond.
+ */
+export function activityView(dateFrom: string, dateTo: string, roomIds?: number[]): ActivityView {
+  if (!isValidDayKey(dateFrom)) throw new HttpError(400, 'dateFrom: YYYY-MM-DD expected')
+  if (!isValidDayKey(dateTo)) throw new HttpError(400, 'dateTo: YYYY-MM-DD expected')
+  if (dateFrom > dateTo) throw new HttpError(400, 'dateFrom must not be after dateTo')
+
+  const monthly = diffDays(dateFrom, dateTo) + 1 > MONTHLY_VIEW_MIN_DAYS
+
+  // A calendar grid always covers whole months, so the SQL window is widened to
+  // the month boundaries; the monthly mode queries exactly the requested period.
+  const scopeFrom = monthly ? dateFrom : `${dateFrom.slice(0, 7)}-01`
+  const scopeTo = monthly ? dateTo : monthEnd(dateTo.slice(0, 7))
 
   return withRateCache(() => {
-    const pad = (n: string | number) => String(n).padStart(2, '0')
-    const dayCount = daysInMonth(year, month)
-    const byDate = new Map<string, { count: number; profitUsd: number }>()
+    let sql = `SELECT t.date, t.room_id, t.buyin, t.result, t.currency
+       FROM tournaments t
+       WHERE t.date >= ? AND t.date <= ?`
+    const params: (string | number)[] = [scopeFrom, scopeTo]
+    if (roomIds && roomIds.length > 0) {
+      sql += ` AND t.room_id IN (${roomIds.map(() => '?').join(',')})`
+      params.push(...roomIds)
+    }
+    sql += `${scopeClause('all', 't.is_mbr')} ORDER BY t.date, t.id`
+
+    const rows = getDb().prepare(sql).all(...params) as unknown as ActivityRow[]
+
+    const byKey = new Map<string, { count: number; profitUsd: number }>()
     let anyBlankRate = false
 
-    for (const row of allTournaments('all')) {
-      if (!row.date.startsWith(`${year}-${pad(month)}`)) continue
-      const bucket = byDate.get(row.date) ?? { count: 0, profitUsd: 0 }
+    for (const row of rows) {
+      const key = monthly ? row.date.slice(0, 7) : row.date
+      const bucket = byKey.get(key) ?? { count: 0, profitUsd: 0 }
       bucket.count += 1
       const profitUsd = convertToUsd(row.result - row.buyin, row.currency, row.date, row.room_id)
       if (profitUsd !== null) {
@@ -114,32 +191,50 @@ export function activityCalendar(year: number, month: number): ActivityCalendar 
       } else {
         anyBlankRate = true
       }
-      byDate.set(row.date, bucket)
+      byKey.set(key, bucket)
     }
 
-    const days: CalendarDay[] = []
     let totalCount = 0
     let totalProfitUsd = 0
-    for (let d = 1; d <= dayCount; d++) {
-      const key = `${year}-${pad(month)}-${pad(d)}`
-      const bucket = byDate.get(key)
-      if (bucket) {
-        totalCount += bucket.count
-        totalProfitUsd += bucket.profitUsd
-        days.push({ date: key, count: bucket.count, profitUsd: bucket.profitUsd })
-      } else {
-        days.push({ date: key, count: 0, profitUsd: null })
-      }
+    for (const bucket of byKey.values()) {
+      totalCount += bucket.count
+      totalProfitUsd += bucket.profitUsd
     }
 
-    return {
-      year,
-      month,
+    const totals = {
+      dateFrom,
+      dateTo,
       totalCount,
       totalProfitUsd,
-      blank: anyBlankRate ? 'не все турниры удалось сконвертировать' : null,
-      days
+      blank: anyBlankRate ? 'не все турниры удалось сконвертировать' : null
     }
+
+    if (monthly) {
+      const months: ActivityMonthCount[] = []
+      const lastMonth = dateTo.slice(0, 7)
+      for (let month = dateFrom.slice(0, 7); month <= lastMonth; month = nextMonthKey(month)) {
+        const bucket = byKey.get(month)
+        months.push(
+          bucket ? { month, count: bucket.count, profitUsd: bucket.profitUsd } : { month, count: 0, profitUsd: null }
+        )
+      }
+      return { mode: 'months', ...totals, months }
+    }
+
+    const months: ActivityMonthGrid[] = []
+    const lastMonth = scopeTo.slice(0, 7)
+    for (let month = scopeFrom.slice(0, 7); month <= lastMonth; month = nextMonthKey(month)) {
+      const [year, monthNum] = month.split('-').map(Number) as [number, number]
+      const days: CalendarDay[] = []
+      for (let day = `${month}-01`; day <= monthEnd(month); day = addDays(day, 1)) {
+        const bucket = byKey.get(day)
+        days.push(
+          bucket ? { date: day, count: bucket.count, profitUsd: bucket.profitUsd } : { date: day, count: 0, profitUsd: null }
+        )
+      }
+      months.push({ year, month: monthNum, days })
+    }
+    return { mode: 'calendar', ...totals, months }
   })
 }
 

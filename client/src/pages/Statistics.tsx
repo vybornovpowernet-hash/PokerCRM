@@ -13,7 +13,7 @@ import {
 } from 'recharts'
 import { api } from '../lib/api'
 import { formatAmount } from '../lib/money'
-import type { ActivityCalendar, Room, SessionStatsResult, TournamentDayCount, TournamentPoint } from '../lib/types'
+import type { ActivityView, Room, SessionStatsResult, TournamentDayCount, TournamentPoint } from '../lib/types'
 
 const MONTHS_RU = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
 const MONTHS_SHORT_RU = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек']
@@ -58,10 +58,25 @@ function rangeFor(preset: PresetId): { from: string; to: string } {
 }
 
 function cellCls(count: number): string {
-  if (count === 0) return 'border-slate-800/60 bg-slate-900/30 text-slate-500'
+  // Days without games are deliberately invisible: no border, no fill — the grid
+  // itself is the layout, not a table of empty boxes.
+  if (count === 0) return 'border-transparent bg-transparent text-slate-500'
   if (count < 15) return 'border-red-800/60 bg-red-950/50 text-red-300'
   if (count <= 20) return 'border-amber-700/60 bg-amber-950/50 text-amber-300'
   return 'border-emerald-700/60 bg-emerald-950/50 text-emerald-300'
+}
+
+/**
+ * Month cells of the long-range view. There is no meaningful "good month" number
+ * like 15–20 tournaments a day, so the shading is a heat map relative to the
+ * busiest month of the period instead of the day-mode traffic light.
+ */
+function monthCellCls(count: number, max: number): string {
+  if (count === 0) return 'border-slate-800/60 bg-slate-900/30 text-slate-500'
+  const ratio = max > 0 ? count / max : 0
+  if (ratio >= 0.66) return 'border-emerald-700/60 bg-emerald-900/50 text-emerald-200'
+  if (ratio >= 0.33) return 'border-emerald-800/60 bg-emerald-950/60 text-emerald-300'
+  return 'border-emerald-900/70 bg-emerald-950/30 text-emerald-400'
 }
 
 function fmtDollars(v: number): string {
@@ -161,7 +176,6 @@ function ProfitLineChart({ points }: { points: TournamentPoint[] }) {
 }
 
 export default function StatisticsPage() {
-  const now = new Date()
   const initial = rangeFor('month')
   const [preset, setPreset] = useState<PresetId | null>('month')
   const [dateFrom, setDateFrom] = useState(initial.from)
@@ -169,9 +183,7 @@ export default function StatisticsPage() {
   const [rooms, setRooms] = useState<Room[]>([])
   const [selectedRoomIds, setSelectedRoomIds] = useState<number[]>([])
   const [stats, setStats] = useState<SessionStatsResult | null>(null)
-  const [calendar, setCalendar] = useState<ActivityCalendar | null>(null)
-  const [calYear, setCalYear] = useState(now.getFullYear())
-  const [calMonth, setCalMonth] = useState(now.getMonth() + 1)
+  const [activity, setActivity] = useState<ActivityView | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -193,10 +205,10 @@ export default function StatisticsPage() {
 
   useEffect(() => {
     api.statistics
-      .calendar(calYear, calMonth)
-      .then(setCalendar)
-      .catch(() => setCalendar(null))
-  }, [calYear, calMonth])
+      .calendar(dateFrom, dateTo, selectedRoomIds)
+      .then(setActivity)
+      .catch(() => setActivity(null))
+  }, [dateFrom, dateTo, selectedRoomIds])
 
   function selectPreset(id: PresetId) {
     setPreset(id)
@@ -211,16 +223,22 @@ export default function StatisticsPage() {
 
   const roomColor = (roomId: number) => rooms.find((r) => r.id === roomId)?.color
 
-  function shiftMonth(delta: number) {
-    const d = new Date(calYear, calMonth - 1 + delta, 1)
-    setCalYear(d.getFullYear())
-    setCalMonth(d.getMonth() + 1)
-  }
-
-  const offset = (() => {
-    const first = new Date(calYear, calMonth - 1, 1)
-    return (first.getDay() + 6) % 7
+  const activityLabel = (() => {
+    if (!activity) return ''
+    if (activity.mode === 'months') {
+      const from = activity.dateFrom.slice(0, 4)
+      const to = activity.dateTo.slice(0, 4)
+      return from === to ? from : `${from} — ${to}`
+    }
+    const first = activity.months[0]
+    const last = activity.months.at(-1)
+    if (!first || !last) return ''
+    if (first.year === last.year && first.month === last.month) return `${MONTHS_RU[first.month - 1]} ${first.year}`
+    if (first.year === last.year) return `${MONTHS_RU[first.month - 1]} — ${MONTHS_RU[last.month - 1]} ${first.year}`
+    return `${MONTHS_RU[first.month - 1]} ${first.year} — ${MONTHS_RU[last.month - 1]} ${last.year}`
   })()
+
+  const busiestMonth = activity?.mode === 'months' ? Math.max(0, ...activity.months.map((m) => m.count)) : 0
 
   const sessionCount = stats?.sessions.length ?? 0
   const finalProfit = stats?.profitSeries.at(-1)?.cumulativeUsd ?? null
@@ -336,56 +354,89 @@ export default function StatisticsPage() {
           <div className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-medium text-slate-100">Календарь активности</h2>
             <div className="flex items-center gap-2 text-sm">
-              <button onClick={() => shiftMonth(-1)} className={inactiveBtn}>
-                ‹
-              </button>
-              <span className="min-w-32 text-center font-medium text-slate-200">
-                {MONTHS_RU[calMonth - 1]} <span className="text-slate-500">{calYear}</span>
-              </span>
-              <button onClick={() => shiftMonth(1)} className={inactiveBtn}>
-                ›
-              </button>
+              <span className="font-medium text-slate-200">{activityLabel}</span>
+              {activity?.mode === 'months' && (
+                <span className="rounded border border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-400">по месяцам</span>
+              )}
             </div>
           </div>
 
           <div className="mb-3 flex shrink-0 flex-wrap items-center gap-4 text-xs text-slate-400">
-            {calendar && (
+            {activity && (
               <>
                 <span>
-                  Турниров: <span className="font-semibold text-slate-200">{calendar.totalCount}</span>
+                  Турниров: <span className="font-semibold text-slate-200">{activity.totalCount}</span>
                 </span>
                 <span>
                   Профит:{' '}
-                  <span className={`font-semibold tabular-nums ${calendar.totalProfitUsd < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-                    {formatAmount(calendar.totalProfitUsd, 'USD')}
+                  <span className={`font-semibold tabular-nums ${activity.totalProfitUsd < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {formatAmount(activity.totalProfitUsd, 'USD')}
                   </span>
                 </span>
               </>
             )}
-            {calendar?.blank && <span className="text-amber-400">{calendar.blank}</span>}
+            {activity?.blank && <span className="text-amber-400">{activity.blank}</span>}
           </div>
 
-          <div className="mb-1 grid shrink-0 grid-cols-7 text-center text-xs font-medium uppercase tracking-wider text-slate-600">
-            {WEEK.map((w) => (
-              <div key={w}>{w}</div>
-            ))}
-          </div>
-
-          <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-7 gap-1.5">
-            {Array.from({ length: offset }).map((_, i) => (
-              <div key={`pad-${i}`} />
-            ))}
-            {calendar?.days.map((d) => (
-              <div
-                key={d.date}
-                title={`${d.date}: ${d.count} турниров, профит ${d.profitUsd != null ? formatAmount(d.profitUsd, 'USD') : '—'}`}
-                className={`flex flex-col items-center justify-center rounded-lg border text-sm font-medium tabular-nums ${cellCls(d.count)}`}
-              >
-                <span className="text-[10px] font-normal text-slate-500">{Number(d.date.slice(8))}</span>
-                {d.count > 0 && <span>{d.count}</span>}
-              </div>
-            ))}
-          </div>
+          {activity?.mode === 'months' ? (
+            <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-4 gap-1.5">
+              {activity.months.map((m) => {
+                const monthIdx = Number(m.month.slice(5, 7)) - 1
+                return (
+                  <div
+                    key={m.month}
+                    title={`${MONTHS_RU[monthIdx]} ${m.month.slice(0, 4)}: ${m.count} турниров, профит ${
+                      m.profitUsd != null ? formatAmount(m.profitUsd, 'USD') : '—'
+                    }`}
+                    className={`flex flex-col items-center justify-center rounded-lg border text-sm font-medium tabular-nums ${monthCellCls(
+                      m.count,
+                      busiestMonth
+                    )}`}
+                  >
+                    <span className="text-[10px] font-normal text-slate-500">
+                      {MONTHS_SHORT_RU[monthIdx]} {m.month.slice(0, 4)}
+                    </span>
+                    {m.count > 0 ? <span>{m.count}</span> : <span className="text-[11px] font-normal">—</span>}
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+              {activity?.months.map((grid) => {
+                const offset = (new Date(grid.year, grid.month - 1, 1).getDay() + 6) % 7
+                return (
+                  <div key={`${grid.year}-${grid.month}`} className="flex min-h-[264px] flex-col">
+                    {activity.months.length > 1 && (
+                      <div className="mb-1 text-xs font-medium text-slate-400">
+                        {MONTHS_RU[grid.month - 1]} {grid.year}
+                      </div>
+                    )}
+                    <div className="mb-1 grid shrink-0 grid-cols-7 text-center text-xs font-medium uppercase tracking-wider text-slate-600">
+                      {WEEK.map((w) => (
+                        <div key={w}>{w}</div>
+                      ))}
+                    </div>
+                    <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-7 gap-1.5">
+                      {Array.from({ length: offset }).map((_, i) => (
+                        <div key={`pad-${i}`} />
+                      ))}
+                      {grid.days.map((d) => (
+                        <div
+                          key={d.date}
+                          title={`${d.date}: ${d.count} турниров, профит ${d.profitUsd != null ? formatAmount(d.profitUsd, 'USD') : '—'}`}
+                          className={`flex flex-col items-center justify-center rounded-lg border text-sm font-medium tabular-nums ${cellCls(d.count)}`}
+                        >
+                          <span className="text-[10px] font-normal text-slate-500">{Number(d.date.slice(8))}</span>
+                          {d.count > 0 && <span>{d.count}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
 
         <div className="flex h-[400px] min-w-0 flex-col rounded-xl border border-slate-700 bg-slate-800/80 p-5 shadow-lg shadow-black/40">

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import StatisticsPage from '../src/pages/Statistics'
 import type { Room, SessionStatsResult } from '../src/lib/types'
@@ -47,7 +47,15 @@ function stats(over: Partial<SessionStatsResult> = {}): SessionStatsResult {
 beforeEach(() => {
   mocks.roomsList.mockReset().mockResolvedValue([room])
   mocks.stats.mockReset().mockResolvedValue(stats())
-  mocks.calendar.mockReset().mockResolvedValue({ year: 2026, month: 9, totalCount: 0, totalProfitUsd: 0, days: [], blank: null })
+  mocks.calendar.mockReset().mockResolvedValue({
+    mode: 'calendar',
+    dateFrom: '2026-09-01',
+    dateTo: '2026-09-30',
+    totalCount: 0,
+    totalProfitUsd: 0,
+    blank: null,
+    months: [{ year: 2026, month: 9, days: [] }]
+  })
 })
 
 function card(label: string): HTMLElement {
@@ -85,5 +93,65 @@ describe('StatisticsPage KPI row', () => {
 
     await waitFor(() => expect(screen.getByText('Лучший турнир')).toBeDefined())
     expect(card('Лучший турнир').textContent).toContain('—')
+  })
+})
+
+describe('StatisticsPage activity calendar', () => {
+  it('passes the page filters (period and rooms) to the calendar endpoint', async () => {
+    render(<StatisticsPage />)
+
+    await waitFor(() => expect(mocks.calendar).toHaveBeenCalled())
+    const [from, to, roomIds] = mocks.calendar.mock.calls[0] as [string, string, number[]]
+    // preset «За месяц» → from the 1st of the current month, no room filter yet
+    expect(from).toMatch(/^\d{4}-\d{2}-01$/)
+    expect(to).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(roomIds).toEqual([])
+
+    fireEvent.click(screen.getByRole('button', { name: 'RedStar' }))
+    await waitFor(() => expect(mocks.calendar).toHaveBeenLastCalledWith(from, to, [room.id]))
+  })
+
+  it('renders a full calendar month even when the period is a single day', async () => {
+    const days = Array.from({ length: 31 }, (_, i) => ({
+      date: `2026-10-${String(i + 1).padStart(2, '0')}`,
+      count: i === 13 ? 3 : 0,
+      profitUsd: i === 13 ? 450 : null
+    }))
+    mocks.calendar.mockResolvedValue({
+      mode: 'calendar',
+      dateFrom: '2026-10-14',
+      dateTo: '2026-10-14',
+      totalCount: 3,
+      totalProfitUsd: 450,
+      blank: null,
+      months: [{ year: 2026, month: 10, days }]
+    })
+    const { container } = render(<StatisticsPage />)
+
+    await waitFor(() => expect(container.querySelectorAll('[title^="2026-10-"]')).toHaveLength(31))
+    expect(screen.getByText('Октябрь 2026')).toBeDefined()
+  })
+
+  it('renders one cell per month when the server reports a long period', async () => {
+    const months = Array.from({ length: 12 }, (_, i) => ({
+      month: `2026-${String(i + 1).padStart(2, '0')}`,
+      count: i === 0 ? 12 : 0,
+      profitUsd: i === 0 ? 1200 : null
+    }))
+    mocks.calendar.mockResolvedValue({
+      mode: 'months',
+      dateFrom: '2026-01-01',
+      dateTo: '2026-12-31',
+      totalCount: 12,
+      totalProfitUsd: 1200,
+      blank: null,
+      months
+    })
+    render(<StatisticsPage />)
+
+    await waitFor(() => expect(screen.getByText('по месяцам')).toBeDefined())
+    expect(screen.getByText('Янв 2026')).toBeDefined()
+    expect(screen.getByText('Дек 2026')).toBeDefined()
+    expect(screen.getByText('2026')).toBeDefined()
   })
 })

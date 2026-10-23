@@ -338,14 +338,41 @@ export interface CalendarDay {
   profitUsd: number | null
 }
 
-export interface ActivityCalendar {
-  year: number
-  month: number
+/** One month bucket of the long-range activity view. */
+export interface ActivityMonthCount {
+  month: string
+  count: number
+  profitUsd: number | null
+}
+
+interface ActivityTotals {
+  dateFrom: string
+  dateTo: string
   totalCount: number
   totalProfitUsd: number
   blank: string | null
+}
+
+/** One month of the classic calendar grid (every day of the month, empty days included). */
+export interface ActivityMonthGrid {
+  year: number
+  month: number
   days: CalendarDay[]
 }
+
+/** Short period — the full month(s) the period touches. */
+export interface ActivityViewCalendar extends ActivityTotals {
+  mode: 'calendar'
+  months: ActivityMonthGrid[]
+}
+
+/** Long period — one cell per month. */
+export interface ActivityViewMonths extends ActivityTotals {
+  mode: 'months'
+  months: ActivityMonthCount[]
+}
+
+export type ActivityView = ActivityViewCalendar | ActivityViewMonths
 
 export interface SessionStat {
   date: string

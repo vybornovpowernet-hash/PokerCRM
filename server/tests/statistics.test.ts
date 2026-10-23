@@ -5,11 +5,25 @@ import { createTransaction } from '../src/services/funds.js'
 import { upsertBalance } from '../src/services/balances.js'
 import { reconcileDay, replaceDayTournaments, saveDayBatch } from '../src/services/tournaments.js'
 import type { TournamentImportInput } from '../src/services/tournaments.js'
-import { activityCalendar, sessionStats, tournamentMbrKpi, tournamentProfitSeries, tournamentSummary, tournamentTimeline } from '../src/services/statistics.js'
+import { activityView, sessionStats, tournamentMbrKpi, tournamentProfitSeries, tournamentSummary, tournamentTimeline } from '../src/services/statistics.js'
+import type { ActivityViewCalendar, ActivityViewMonths } from '../src/services/statistics.js'
 import { upsertRate } from '../src/services/rates/storage.js'
 
 let pokerdon: number
 let redstar: number
+
+/** Narrowing helpers: `expect(view.mode).toBe(...)` does not narrow for TypeScript. */
+function calendarOf(dateFrom: string, dateTo: string, roomIds?: number[]): ActivityViewCalendar {
+  const view = activityView(dateFrom, dateTo, roomIds)
+  if (view.mode !== 'calendar') throw new Error(`expected a calendar view, got ${view.mode}`)
+  return view
+}
+
+function monthsOf(dateFrom: string, dateTo: string, roomIds?: number[]): ActivityViewMonths {
+  const view = activityView(dateFrom, dateTo, roomIds)
+  if (view.mode !== 'months') throw new Error(`expected a months view, got ${view.mode}`)
+  return view
+}
 
 beforeEach(() => {
   setDbForTests(initDb(':memory:'))
@@ -51,7 +65,7 @@ describe('statistics', () => {
     expect(timeline[0].profitUsd).toBe(Math.round((-100_00 * 10_000 * 10_000) / (90 * 10_000) / 10_000))
   })
 
-  it('counts tournaments per day in a month and totals', () => {
+  it('counts tournaments per day in a period and totals', () => {
     replaceDayTournaments(pokerdon, '2026-09-10', [
       { buyin: 50_00, result: 80_00, currency: 'RUB' },
       { buyin: 20_00, result: 0, currency: 'RUB' }
@@ -59,11 +73,12 @@ describe('statistics', () => {
     replaceDayTournaments(pokerdon, '2026-09-11', [{ buyin: 50_00, result: 40_00, currency: 'RUB' }])
     replaceDayTournaments(redstar, '2026-09-20', [{ buyin: 100_00, result: 105_00, currency: 'EUR' }])
 
-    const cal = activityCalendar(2026, 9)
+    const cal = calendarOf('2026-09-01', '2026-09-30')
+    expect(cal.months).toHaveLength(1)
     expect(cal.totalCount).toBe(4)
-    expect(cal.days).toHaveLength(30)
-    expect(cal.days.find((d) => d.date === '2026-09-10')?.count).toBe(2)
-    expect(cal.days.find((d) => d.date === '2026-09-11')?.count).toBe(1)
+    expect(cal.months[0].days).toHaveLength(30)
+    expect(cal.months[0].days.find((d) => d.date === '2026-09-10')?.count).toBe(2)
+    expect(cal.months[0].days.find((d) => d.date === '2026-09-11')?.count).toBe(1)
     const expectedProfit =
       Math.round((30_00 * 10_000 * 10_000) / (90 * 10_000) / 10_000) +
       Math.round((-20_00 * 10_000 * 10_000) / (90 * 10_000) / 10_000) +
@@ -72,17 +87,79 @@ describe('statistics', () => {
     expect(cal.totalProfitUsd).toBe(expectedProfit)
   })
 
-  it('empty months have zero counts and other months stay clean', () => {
-    replaceDayTournaments(pokerdon, '2026-09-10', [{ buyin: 50_00, result: 80_00, currency: 'RUB' }])
-    const cal = activityCalendar(2026, 10)
-    expect(cal.totalCount).toBe(0)
-    expect(cal.days).toHaveLength(31)
-    expect(cal.days.every((d) => d.count === 0)).toBe(true)
+  it('a one-day filter still renders the whole calendar month', () => {
+    replaceDayTournaments(pokerdon, '2026-10-14', [{ buyin: 50_00, result: 80_00, currency: 'RUB' }])
+    replaceDayTournaments(pokerdon, '2026-10-02', [{ buyin: 50_00, result: 40_00, currency: 'RUB' }])
+
+    const cal = calendarOf('2026-10-14', '2026-10-14')
+    expect(cal.months).toHaveLength(1)
+    expect(cal.months[0]).toMatchObject({ year: 2026, month: 10 })
+    expect(cal.months[0].days).toHaveLength(31)
+    // the grid covers the month, not just the selected day
+    expect(cal.totalCount).toBe(2)
+    expect(cal.months[0].days.find((d) => d.date === '2026-10-02')?.count).toBe(1)
+    expect(cal.months[0].days.find((d) => d.date === '2026-10-01')?.count).toBe(0)
   })
 
-  it('validates year/month', () => {
-    expect(() => activityCalendar(1999, 1)).toThrow(/year/)
-    expect(() => activityCalendar(2026, 13)).toThrow(/month/)
+  it('a week straddling two months renders both full months', () => {
+    const cal = calendarOf('2026-10-29', '2026-11-04')
+    expect(cal.months.map((m) => `${m.year}-${m.month}`)).toEqual(['2026-10', '2026-11'])
+    expect(cal.months[0].days).toHaveLength(31)
+    expect(cal.months[1].days).toHaveLength(30)
+  })
+
+  it('empty periods have zero counts and other months stay clean', () => {
+    replaceDayTournaments(pokerdon, '2026-09-10', [{ buyin: 50_00, result: 80_00, currency: 'RUB' }])
+    const cal = calendarOf('2026-10-01', '2026-10-31')
+    expect(cal.totalCount).toBe(0)
+    expect(cal.months[0].days).toHaveLength(31)
+    expect(cal.months[0].days.every((d) => d.count === 0)).toBe(true)
+  })
+
+  it('honours the room filter — the widget must follow the page filter', () => {
+    replaceDayTournaments(pokerdon, '2026-09-10', [{ buyin: 50_00, result: 80_00, currency: 'RUB' }])
+    replaceDayTournaments(redstar, '2026-09-10', [{ buyin: 100_00, result: 105_00, currency: 'EUR' }])
+
+    expect(calendarOf('2026-09-10', '2026-09-10').totalCount).toBe(2)
+    const onlyRedstar = calendarOf('2026-09-10', '2026-09-10', [redstar])
+    expect(onlyRedstar.totalCount).toBe(1)
+    expect(onlyRedstar.totalProfitUsd).toBe(5_50)
+    const onlyPokerdon = calendarOf('2026-09-10', '2026-09-10', [pokerdon])
+    expect(onlyPokerdon.months[0].days.find((d) => d.date === '2026-09-10')?.count).toBe(1)
+    expect(onlyPokerdon.totalProfitUsd).toBe(Math.round((30_00 * 10_000 * 10_000) / (90 * 10_000) / 10_000))
+  })
+
+  it('folds a period longer than a quarter into one bucket per month', () => {
+    replaceDayTournaments(pokerdon, '2026-09-10', [{ buyin: 50_00, result: 80_00, currency: 'RUB' }])
+    replaceDayTournaments(pokerdon, '2026-09-11', [{ buyin: 50_00, result: 40_00, currency: 'RUB' }])
+    replaceDayTournaments(redstar, '2026-11-05', [{ buyin: 100_00, result: 105_00, currency: 'EUR' }])
+
+    const year = monthsOf('2026-01-01', '2026-12-31')
+    expect(year.months).toHaveLength(12)
+    expect(year.months[0].month).toBe('2026-01')
+    expect(year.months[11].month).toBe('2026-12')
+    expect(year.months[8]).toMatchObject({ month: '2026-09', count: 2 })
+    expect(year.months[10]).toMatchObject({ month: '2026-11', count: 1 })
+    expect(year.months[0].count).toBe(0)
+    expect(year.months[0].profitUsd).toBeNull()
+    expect(year.totalCount).toBe(3)
+
+    // a partial range keeps only the months it touches (108 days > a quarter)
+    const months = monthsOf('2026-09-15', '2026-12-31')
+    expect(months.months.map((m) => m.month)).toEqual(['2026-09', '2026-10', '2026-11', '2026-12'])
+  })
+
+  it('switches to months exactly after three months, not before', () => {
+    // 2026-01-01..2026-04-02 = 92 days (a full quarter) → still a calendar
+    expect(activityView('2026-01-01', '2026-04-02').mode).toBe('calendar')
+    // one more day crosses the threshold
+    expect(activityView('2026-01-01', '2026-04-03').mode).toBe('months')
+  })
+
+  it('validates the date range', () => {
+    expect(() => activityView('2026-13-01', '2026-12-31')).toThrow(/dateFrom/)
+    expect(() => activityView('2026-01-01', '2026-02-30')).toThrow(/dateTo/)
+    expect(() => activityView('2026-09-10', '2026-09-01')).toThrow(/after/)
   })
 })
 
@@ -285,7 +362,7 @@ describe('sessionStats', () => {
     expect(stats.bestSessionUsd).toBe(10_00)
     expect(stats.worstSessionUsd).toBe(10_00)
 
-    const cal = activityCalendar(2026, 9)
+    const cal = calendarOf('2026-09-01', '2026-09-30')
     expect(cal.totalProfitUsd).toBe(stats.totalProfitUsd) // calendar total === KPI
     expect(cal.totalCount).toBe(stats.tournamentCount)
   })
@@ -515,11 +592,11 @@ describe('MBR isolation', () => {
     ])
   })
 
-  it('activityCalendar is pure poker and therefore counts MBR rows too', () => {
+  it('activity view is pure poker and therefore counts MBR rows too', () => {
     seed()
-    const cal = activityCalendar(2026, 9)
+    const cal = calendarOf('2026-09-01', '2026-09-30')
     expect(cal.totalCount).toBe(3)
-    expect(cal.days.find((d) => d.date === '2026-09-16')?.count).toBe(3)
+    expect(cal.months[0].days.find((d) => d.date === '2026-09-16')?.count).toBe(3)
     expect(cal.totalProfitUsd).toBe(900)
   })
 

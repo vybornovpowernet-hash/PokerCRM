@@ -1,5 +1,5 @@
 import type {
-  ActivityCalendar,
+  ActivityView,
   AppSettings,
   AppVersionInfo,
   BalanceEntry,
@@ -208,8 +208,10 @@ export const api = {
   },
   statistics: {
     timeline: () => request<{ timeline: TimelinePoint[] }>('/statistics/timeline').then((r) => r.timeline),
-    calendar: (year: number, month: number) =>
-      request<{ calendar: ActivityCalendar }>(`/statistics/calendar${queryString({ year, month })}`).then((r) => r.calendar),
+    calendar: (dateFrom: string, dateTo: string, roomIds?: number[]) =>
+      request<{ activity: ActivityView }>(
+        `/statistics/activity${queryString({ dateFrom, dateTo, roomIds: roomIds && roomIds.length > 0 ? roomIds.join(',') : undefined })}`
+      ).then((r) => r.activity),
     sessions: (dateFrom: string, dateTo: string, roomIds?: number[]) =>
       request<{ stats: SessionStatsResult }>(
         `/statistics/sessions${queryString({ dateFrom, dateTo, roomIds: roomIds ? roomIds.join(',') : undefined })}`
