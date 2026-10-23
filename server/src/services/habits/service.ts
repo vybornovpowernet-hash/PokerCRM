@@ -2,6 +2,7 @@ import { HttpError } from '../../lib/errors.js'
 import { addDays, currentMonthKey, dayKey, isValidDayKey, isValidMonthKey, monthEnd, monthStart } from '../../lib/date.js'
 import { validateColor } from '../../lib/color.js'
 import { withTransaction } from '../../db.js'
+import { getDayStartHour } from '../settings.js'
 import {
   clearHabitArchived,
   deleteLog,
@@ -24,6 +25,17 @@ const MAX_HABIT_NAME = 100
 // character instead of two (or more) and cannot eat the user's budget.
 function charCount(value: string): number {
   return [...value].length
+}
+
+function getLogicalToday(): string {
+  const now = new Date()
+  const dayStartHour = getDayStartHour()
+  const key = dayKey(now)
+  if (dayStartHour <= 0) return key
+  if (now.getHours() < dayStartHour) {
+    return addDays(key, -1)
+  }
+  return key
 }
 
 function validateName(value: unknown): string {
@@ -80,10 +92,6 @@ function validateOrderIds(value: unknown): number[] {
     if (ids.includes(raw as number)) throw new HttpError(400, 'ids: must not contain duplicates')
     ids.push(raw as number)
   }
-  const known = new Set(listActiveHabitRows().map((habit) => habit.id))
-  for (const id of ids) {
-    if (!known.has(id)) throw new HttpError(400, `ids: unknown habit ${id}`)
-  }
   return ids
 }
 
@@ -94,11 +102,17 @@ function validateOrderIds(value: unknown): number[] {
 // land where the habit used to sit.
 export function reorderHabits(input: unknown): Habit[] {
   const ids = validateOrderIds(input)
-  const current = listActiveHabitRows()
-  const moved = new Set(ids)
-  const rest = current.filter((habit) => !moved.has(habit.id)).map((habit) => habit.id)
-  const order = [...ids, ...rest]
-  withTransaction(() => order.forEach((id, index) => setHabitSortOrder(id, index)))
+  withTransaction(() => {
+    const current = listActiveHabitRows()
+    const known = new Set(current.map((habit) => habit.id))
+    for (const id of ids) {
+      if (!known.has(id)) throw new HttpError(400, `ids: unknown habit ${id}`)
+    }
+    const moved = new Set(ids)
+    const rest = current.filter((habit) => !moved.has(habit.id)).map((habit) => habit.id)
+    const order = [...ids, ...rest]
+    order.forEach((id, index) => setHabitSortOrder(id, index))
+  })
   return listActiveHabitRows()
 }
 
@@ -110,8 +124,11 @@ export function updateHabit(id: number, input: { name?: unknown; color?: unknown
 }
 
 export function setHabitLog(id: number, dateValue: unknown, statusValue: unknown): HabitLog | null {
-  requireHabit(id)
+  const habit = requireHabit(id)
+  if (habit.archivedAt !== null) throw new HttpError(400, 'Нельзя изменять логи архивированной привычки')
   const day = validateDate(dateValue)
+  const today = getLogicalToday()
+  if (day > today) throw new HttpError(400, 'Нельзя отмечать привычку на будущую дату')
   const status = validateStatus(statusValue)
   if (status === null) {
     deleteLog(id, day)
@@ -145,6 +162,7 @@ export function listHabitHistory(): HabitHistoryItem[] {
 // for the completion rate (a half-kept habit still moves the needle), but only a
 // strict `done` extends the streak — a partial day is a real achievement, not a
 // flawless one.
+// Streak is calculated against the logical calendar (dayStartHour) — same as tournaments.
 function computeStats(logs: Record<string, HabitStatus>): HabitStats {
   const dates = Object.keys(logs).sort()
   let done = 0
