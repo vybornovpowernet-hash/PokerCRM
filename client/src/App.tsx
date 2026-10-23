@@ -5,7 +5,6 @@ import SessionsPage from './pages/Sessions'
 import RoomsPage from './pages/Rooms'
 import TransactionsPage from './pages/Transactions'
 import TournamentsPage from './pages/Tournaments'
-import StatsPage from './pages/Statistics'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { GearIcon, SettingsModal } from './components/SettingsModal'
 import { api } from './lib/api'
@@ -30,6 +29,9 @@ const TABS: { id: TabId; label: string }[] = [
 const GoalsPage = lazy(() => import('./goals/GoalsPage').then((m) => ({ default: m.GoalsPage })))
 const HabitsPage = lazy(() => import('./habits/HabitsPage').then((m) => ({ default: m.HabitsPage })))
 const GoalToasts = lazy(() => import('./goals/components/GoalToasts').then((m) => ({ default: m.GoalToasts })))
+// Statistics carries Recharts + d3 (~300 kB minified): it must not ride along in
+// the entry bundle for users who never open the tab.
+const StatsPage = lazy(() => import('./pages/Statistics'))
 
 const TAB_KEY = 'poker-crm-tab'
 
