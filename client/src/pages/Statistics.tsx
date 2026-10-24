@@ -153,7 +153,7 @@ const TournamentsBarChart = memo(function TournamentsBarChart({
           <XAxis dataKey="label" stroke="#64748b" fontSize={12} tickMargin={10} interval="preserveStartEnd" />
           <YAxis allowDecimals={false} stroke="#64748b" fontSize={12} width={32} />
           <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: '#334155', opacity: 0.35 }} />
-          <Bar dataKey="count" fill="#38bdf8" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+          <Bar dataKey="count" fill="#38bdf8" radius={[4, 4, 0, 0]}>
             <LabelList dataKey="count" position="top" fill="#f1f5f9" fontSize={12} />
           </Bar>
         </BarChart>
@@ -192,7 +192,6 @@ const ProfitLineChart = memo(function ProfitLineChart({ points }: { points: Tour
             strokeWidth={2}
             dot={points.length > DOT_LIMIT ? false : { r: 3, fill: '#fbbf24', strokeWidth: 0 }}
             activeDot={{ r: 5 }}
-            isAnimationActive={false}
           />
         </LineChart>
       </ResponsiveContainer>
