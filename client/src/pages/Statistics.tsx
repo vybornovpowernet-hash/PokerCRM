@@ -502,8 +502,10 @@ export default function StatisticsPage() {
 
             <div className="flex h-[400px] min-w-0 flex-col rounded-xl border border-slate-700 bg-slate-800/80 p-5 shadow-lg shadow-black/40">
               <h2 className="mb-4 shrink-0 text-lg font-medium uppercase tracking-wider text-slate-100">Турниров за день</h2>
-              <div key={`${dateFrom}-${dateTo}`} className="min-h-0 flex-1 w-full h-full animate-fade transition-opacity duration-700">
-                <TournamentsBarChart days={stats?.tournamentDays ?? EMPTY_DAYS} periodDays={periodDays} />
+              <div className="relative flex-1 min-h-0 w-full">
+                <div key={`${dateFrom}-${dateTo}`} className="absolute inset-0 animate-fade transition-opacity duration-700">
+                  <TournamentsBarChart days={stats?.tournamentDays ?? EMPTY_DAYS} periodDays={periodDays} />
+                </div>
               </div>
             </div>
           </div>
@@ -520,8 +522,10 @@ export default function StatisticsPage() {
                 </span>
               )}
             </div>
-            <div key={`${dateFrom}-${dateTo}-profit`} className="min-h-0 flex-1 w-full h-full animate-fade transition-opacity duration-700">
-              <ProfitLineChart points={stats?.profitSeries ?? EMPTY_POINTS} />
+            <div className="relative flex-1 min-h-0 w-full">
+              <div key={`${dateFrom}-${dateTo}-profit`} className="absolute inset-0 animate-fade transition-opacity duration-700">
+                <ProfitLineChart points={stats?.profitSeries ?? EMPTY_POINTS} />
+              </div>
             </div>
           </div>
         </div>
