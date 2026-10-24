@@ -153,7 +153,7 @@ const TournamentsBarChart = memo(function TournamentsBarChart({
           <XAxis dataKey="label" stroke="#64748b" fontSize={12} tickMargin={10} interval="preserveStartEnd" />
           <YAxis allowDecimals={false} stroke="#64748b" fontSize={12} width={32} />
           <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: '#334155', opacity: 0.35 }} />
-          <Bar dataKey="count" fill="#38bdf8" radius={[4, 4, 0, 0]}>
+          <Bar dataKey="count" fill="#38bdf8" radius={[4, 4, 0, 0]} animationDuration={700} animationEasing="ease-out">
             <LabelList dataKey="count" position="top" fill="#f1f5f9" fontSize={12} />
           </Bar>
         </BarChart>
@@ -192,6 +192,8 @@ const ProfitLineChart = memo(function ProfitLineChart({ points }: { points: Tour
             strokeWidth={2}
             dot={points.length > DOT_LIMIT ? false : { r: 3, fill: '#fbbf24', strokeWidth: 0 }}
             activeDot={{ r: 5 }}
+            animationDuration={900}
+            animationEasing="ease-out"
           />
         </LineChart>
       </ResponsiveContainer>
@@ -500,7 +502,9 @@ export default function StatisticsPage() {
 
             <div className="flex h-[400px] min-w-0 flex-col rounded-xl border border-slate-700 bg-slate-800/80 p-5 shadow-lg shadow-black/40">
               <h2 className="mb-4 shrink-0 text-lg font-medium uppercase tracking-wider text-slate-100">Турниров за день</h2>
-              <TournamentsBarChart days={stats?.tournamentDays ?? EMPTY_DAYS} periodDays={periodDays} />
+              <div key={`${dateFrom}-${dateTo}`} className="min-h-0 flex-1 w-full h-full animate-fade transition-opacity duration-700">
+                <TournamentsBarChart days={stats?.tournamentDays ?? EMPTY_DAYS} periodDays={periodDays} />
+              </div>
             </div>
           </div>
 
@@ -516,7 +520,9 @@ export default function StatisticsPage() {
                 </span>
               )}
             </div>
-            <ProfitLineChart points={stats?.profitSeries ?? EMPTY_POINTS} />
+            <div key={`${dateFrom}-${dateTo}-profit`} className="min-h-0 flex-1 w-full h-full animate-fade transition-opacity duration-700">
+              <ProfitLineChart points={stats?.profitSeries ?? EMPTY_POINTS} />
+            </div>
           </div>
         </div>
       )}
