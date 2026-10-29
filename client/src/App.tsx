@@ -72,10 +72,8 @@ export default function App() {
     stats: <StatsPage />
   }
 
-  // The month grid (sticky name + 31 days + «Прогресс») needs more than the
-  // default 1280px content column, so the habits tab gets a wider shell —
-  // header and main stay aligned by sharing the same class.
-  const contentWidth = activeTab === 'habits' ? 'max-w-[90rem]' : 'max-w-7xl'
+  // Always use the wider shell to avoid layout shift between tabs (habits needs it)
+  const contentWidth = 'max-w-[90rem]'
 
   return (
     <ErrorBoundary>

@@ -143,11 +143,11 @@ const TournamentsBarChart = memo(function TournamentsBarChart({
 
   if (days.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-slate-500">Нет турниров за период</div>
+      <div className="flex h-full w-full items-center justify-center text-sm text-slate-500">Нет турниров за период</div>
     )
   }
   return (
-    <div className="min-h-0 flex-1">
+    <div className="h-full w-full">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 20, right: 8, left: 8, bottom: 0 }}>
           <XAxis dataKey="label" stroke="#64748b" fontSize={12} tickMargin={10} interval="preserveStartEnd" />
@@ -170,11 +170,11 @@ const ProfitLineChart = memo(function ProfitLineChart({ points }: { points: Tour
 
   if (points.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-slate-500">Нет турниров за период</div>
+      <div className="flex h-full w-full items-center justify-center text-sm text-slate-500">Нет турниров за период</div>
     )
   }
   return (
-    <div className="min-h-0 flex-1">
+    <div className="h-full w-full">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 12, right: 8, left: 8, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
@@ -314,7 +314,7 @@ export default function StatisticsPage() {
   )
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="mx-auto w-full space-y-6">
       {error && <div className="rounded-lg border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">{error}</div>}
 
       <div className="flex flex-wrap items-center gap-3">
