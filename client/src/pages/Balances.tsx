@@ -136,7 +136,16 @@ const RoomBalanceRow = memo(function RoomBalanceRow({
         ) : null}
       </div>
 
-      <form className="flex w-full shrink-0 items-center gap-3 sm:w-auto" onSubmit={submit}>
+      <form className="flex w-full shrink-0 items-center gap-2 sm:w-auto" onSubmit={submit}>
+        <span
+          id={`balance-delta-${room.id}`}
+          className={`min-w-0 shrink-0 text-right text-sm font-medium tabular-nums sm:min-w-[6.5rem] ${
+            delta === null || delta === 0 ? '' : delta > 0 ? 'text-emerald-400' : 'text-rose-400'
+          }`}
+          title={dirty ? `изменение к балансу от ${latest?.date ?? 'нуля'}` : undefined}
+        >
+          {deltaText}
+        </span>
         <input
           ref={inputRef}
           id={`balance-input-${room.id}`}
@@ -153,15 +162,6 @@ const RoomBalanceRow = memo(function RoomBalanceRow({
           aria-label={`Новый баланс ${room.name}`}
           aria-describedby={describedBy}
         />
-        <span
-          id={`balance-delta-${room.id}`}
-          className={`min-w-0 shrink-0 text-right text-sm font-medium tabular-nums sm:min-w-[6.5rem] ${
-            delta === null || delta === 0 ? '' : delta > 0 ? 'text-emerald-400' : 'text-rose-400'
-          }`}
-          title={dirty ? `изменение к балансу от ${latest?.date ?? 'нуля'}` : undefined}
-        >
-          {deltaText}
-        </span>
         <button
           type="submit"
           disabled={!dirty || saving}
@@ -261,7 +261,7 @@ export default function BalancesPage() {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
         <div className="min-w-0 rounded-xl border border-slate-700 bg-slate-800/80 p-5 shadow-lg shadow-black/40">
           <div className="mb-4">
             <h2 className="text-lg font-medium text-slate-100">Румы</h2>
