@@ -12,7 +12,7 @@ const TODAY = new Date().toISOString().slice(0, 10)
 const NO_BALANCES: CurrentBalances['balances'] = []
 
 const inputCls =
-  'w-40 rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-right text-sm tabular-nums text-slate-100 shadow-inner outline-none transition placeholder:text-slate-600 focus:border-slate-500 focus-visible:ring-2 focus-visible:ring-slate-500/30'
+  'w-full min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-right text-sm tabular-nums text-slate-100 shadow-inner outline-none transition placeholder:text-slate-600 focus:border-slate-500 focus-visible:ring-2 focus-visible:ring-slate-500/30 sm:w-40 sm:flex-none'
 
 /** One feed: its latest known rate, the day it belongs to, and its own freshness. */
 function RateLine({ label, feed }: { label: string; feed?: RateInfo }) {
@@ -91,8 +91,8 @@ const RoomBalanceRow = memo(function RoomBalanceRow({
   }
 
   return (
-    <div className="flex flex-col gap-3 py-4 first:pt-1 last:pb-1 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-      <div className="min-w-0">
+    <div className="flex flex-col gap-3 py-4 first:pt-1 last:pb-1 sm:flex-row sm:items-center sm:gap-6">
+      <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <span className="text-base font-medium" style={{ color: room.color }}>{room.name}</span>
           <span className="rounded border border-slate-700 px-1.5 py-0.5 text-[10px] uppercase text-slate-400">{room.cashCurrency}</span>
@@ -122,57 +122,55 @@ const RoomBalanceRow = memo(function RoomBalanceRow({
             {latest.source === 'auto' ? 'авто-расчет · ' : ''}обновлено {latest.date}
           </div>
         ) : null}
-      </div>
-
-      <div className="flex flex-col items-stretch gap-2 sm:items-end">
-        <form className="flex items-center gap-2" onSubmit={submit}>
-          <input
-            ref={inputRef}
-            id={`balance-input-${room.id}`}
-            name={`balance-${room.id}`}
-            className={inputCls}
-            type="text"
-            value={draft}
-            onChange={(event) => onDraftChange(room.id, normalizeAmountInput(event.target.value))}
-            placeholder="Новый баланс"
-            inputMode="decimal"
-            autoComplete="off"
-            spellCheck={false}
-            enterKeyHint="done"
-            aria-label={`Новый баланс ${room.name}`}
-            aria-describedby={describedBy}
-          />
-          <span
-            id={`balance-delta-${room.id}`}
-            className={`min-w-[6.5rem] text-right text-sm font-medium tabular-nums ${
-              delta === null || delta === 0 ? '' : delta > 0 ? 'text-emerald-400' : 'text-rose-400'
-            }`}
-            title={dirty ? `изменение к балансу от ${latest?.date ?? 'нуля'}` : undefined}
-          >
-            {deltaText}
-          </span>
-          <button
-            type="submit"
-            disabled={!dirty || saving}
-            aria-label={`Записать баланс ${room.name}`}
-            className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 transition hover:bg-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300/50"
-          >
-            {saving ? '…' : 'Записать'}
-          </button>
-        </form>
         {latest && !comparable ? (
-          <div className="text-xs text-amber-400">баланс записан в {latest.currency} — дельта не считается</div>
+          <div className="mt-1 text-xs text-amber-400">баланс записан в {latest.currency} — дельта не считается</div>
         ) : null}
         {latest?.pendingImport ? (
           <button
             type="button"
             onClick={() => onOpenTournaments(room, tourneyDate)}
-            className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-300 transition hover:border-slate-500 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300/40"
+            className="mt-2 rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-300 transition hover:border-slate-500 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300/40"
           >
             Заполнить турниры на {tourneyDate}
           </button>
         ) : null}
       </div>
+
+      <form className="flex w-full shrink-0 items-center gap-3 sm:w-auto" onSubmit={submit}>
+        <input
+          ref={inputRef}
+          id={`balance-input-${room.id}`}
+          name={`balance-${room.id}`}
+          className={inputCls}
+          type="text"
+          value={draft}
+          onChange={(event) => onDraftChange(room.id, normalizeAmountInput(event.target.value))}
+          placeholder="Новый баланс"
+          inputMode="decimal"
+          autoComplete="off"
+          spellCheck={false}
+          enterKeyHint="done"
+          aria-label={`Новый баланс ${room.name}`}
+          aria-describedby={describedBy}
+        />
+        <span
+          id={`balance-delta-${room.id}`}
+          className={`min-w-0 shrink-0 text-right text-sm font-medium tabular-nums sm:min-w-[6.5rem] ${
+            delta === null || delta === 0 ? '' : delta > 0 ? 'text-emerald-400' : 'text-rose-400'
+          }`}
+          title={dirty ? `изменение к балансу от ${latest?.date ?? 'нуля'}` : undefined}
+        >
+          {deltaText}
+        </span>
+        <button
+          type="submit"
+          disabled={!dirty || saving}
+          aria-label={`Записать баланс ${room.name}`}
+          className="shrink-0 whitespace-nowrap rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 transition hover:bg-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300/50"
+        >
+          {saving ? '…' : 'Записать'}
+        </button>
+      </form>
     </div>
   )
 })
@@ -252,7 +250,7 @@ export default function BalancesPage() {
     notice?.kind === 'error' ? 'border-red-900 bg-red-950/40 text-red-300' : 'border-emerald-900 bg-emerald-950/40 text-emerald-300'
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="space-y-6">
       {notice ? (
         <div
           role={notice.kind === 'error' ? 'alert' : 'status'}
@@ -263,41 +261,43 @@ export default function BalancesPage() {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
-        <BankrollDistribution rooms={rooms} balances={data?.balances ?? NO_BALANCES} totalUsd={data?.totalUsd ?? null} />
-        <RatesCard rates={data?.rates ?? null} />
-      </div>
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,1fr)]">
+        <div className="min-w-0 rounded-xl border border-slate-700 bg-slate-800/80 p-5 shadow-lg shadow-black/40">
+          <div className="mb-4">
+            <h2 className="text-lg font-medium text-slate-100">Румы</h2>
+            <p className="text-xs text-slate-500">запиши баланс рума → рядом появится «Заполнить турниры»</p>
+          </div>
 
-      <div className="rounded-xl border border-slate-700 bg-slate-800/80 p-5 shadow-lg shadow-black/40">
-        <div className="mb-4">
-          <h2 className="text-lg font-medium text-slate-100">Румы</h2>
-          <p className="text-xs text-slate-500">запиши баланс рума → рядом появится «Заполнить турниры»</p>
+          {initialLoading ? (
+            <div className="py-8 text-center text-sm text-slate-500">Загрузка…</div>
+          ) : rooms.length === 0 ? (
+            <div className="py-8 text-center text-sm text-slate-500">Пока нет румов — добавь их во вкладке «Румы».</div>
+          ) : (
+            <div className="divide-y divide-slate-800/60">
+              {rooms.map((room) => (
+                <RoomBalanceRow
+                  key={room.id}
+                  room={room}
+                  latest={balanceByRoom.get(room.id) ?? null}
+                  draft={drafts[room.id] ?? ''}
+                  saving={saving[room.id] ?? false}
+                  onDraftChange={handleDraftChange}
+                  onSave={handleSave}
+                  onOpenTournaments={handleOpenTournaments}
+                />
+              ))}
+            </div>
+          )}
+
+          {staleAny ? (
+            <div className="mt-3 text-xs text-amber-400">Для части румов нет курса конвертации — проверьте курсы валют.</div>
+          ) : null}
         </div>
 
-        {initialLoading ? (
-          <div className="py-8 text-center text-sm text-slate-500">Загрузка…</div>
-        ) : rooms.length === 0 ? (
-          <div className="py-8 text-center text-sm text-slate-500">Пока нет румов — добавь их во вкладке «Румы».</div>
-        ) : (
-          <div className="divide-y divide-slate-800/60">
-            {rooms.map((room) => (
-              <RoomBalanceRow
-                key={room.id}
-                room={room}
-                latest={balanceByRoom.get(room.id) ?? null}
-                draft={drafts[room.id] ?? ''}
-                saving={saving[room.id] ?? false}
-                onDraftChange={handleDraftChange}
-                onSave={handleSave}
-                onOpenTournaments={handleOpenTournaments}
-              />
-            ))}
-          </div>
-        )}
-
-        {staleAny ? (
-          <div className="mt-3 text-xs text-amber-400">Для части румов нет курса конвертации — проверьте курсы валют.</div>
-        ) : null}
+        <aside className="flex min-w-0 flex-col gap-4">
+          <BankrollDistribution rooms={rooms} balances={data?.balances ?? NO_BALANCES} totalUsd={data?.totalUsd ?? null} />
+          <RatesCard rates={data?.rates ?? null} />
+        </aside>
       </div>
 
       <TournamentPopup
