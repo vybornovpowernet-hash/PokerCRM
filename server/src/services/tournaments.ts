@@ -9,6 +9,10 @@ import { computeRoomProfit, sessionRoomProfit } from './sessions.js'
 import type { RoomProfit } from './sessions.js'
 import { convertCross, convertToUsd, withRateCache } from './rates/convert.js'
 import { pendingImportPairs, reconcilePendingImports, clearPendingImport } from './pending.js'
+import { tournamentProfitUsd } from './tournamentProfit.js'
+import { deleteAck, getAck, saveAck, validateAckNote } from './reconcileAcks.js'
+
+export { tournamentProfitUsd } from './tournamentProfit.js'
 
 export interface TournamentRow {
   id: number
@@ -70,6 +74,10 @@ export interface DayReconcile {
   remainderUsd: number | null
   discrepancyPct: number | null
   flagged: boolean
+  /** The user accepted this residual as unexplainable (`reconcile_acks`) and the
+   *  stored value still matches the computed one. No casino row exists: the day
+   *  is simply forgiven and stops being flagged. */
+  acknowledged: boolean
   blank: string | null
 }
 
@@ -79,6 +87,7 @@ export interface ReconcileFlag {
   roomName: string
   tournamentCount: number
   flagged: boolean
+  acknowledged: boolean
   remainderUsd: number | null
 }
 
@@ -181,16 +190,6 @@ function parseImport(input: TournamentImportInput, index: number): TournamentRow
   return { id: 0, roomId: 0, roomName: '', date, buyin, result, currency: ccy, name: name ?? null, rank, entrants, tournamentId, isMbr: isMbrByName(name ?? null) }
 }
 
-/** Profit of the rows in USD: Σ (result − buyin) converted with the day rate. */
-export function tournamentProfitUsd(rows: TournamentRow[]): number {
-  let total = 0
-  for (const row of rows) {
-    const usd = convertToUsd(row.result - row.buyin, row.currency, row.date, row.roomId)
-    if (usd !== null) total += usd
-  }
-  return total
-}
-
 /**
  * Per room+day discrepancy summary for a date range. Days without a balance
  * entry are skipped (there is nothing to reconcile against).
@@ -213,6 +212,7 @@ export function reconcileSummary(dateFrom: string, dateTo: string): ReconcileFla
             roomName: entry.roomName,
             tournamentCount: count.c,
             flagged: reconcile.flagged,
+            acknowledged: reconcile.acknowledged,
             remainderUsd: reconcile.remainderUsd
           })
         }
@@ -247,6 +247,7 @@ export function orphanedDiscrepancies(dateFrom?: string, dateTo?: string, roomId
         if (roomId !== undefined && entry.roomId !== roomId) continue
         if (pending.has(`${entry.roomId}:${date}`)) continue
         const reconcile = reconcileDay(entry.roomId, date)
+        if (reconcile.acknowledged) continue
         if (reconcile.flagged && reconcile.remainderUsd !== null && reconcile.remainderUsd !== 0) {
           orphans.push({ date, roomId: entry.roomId, roomName: entry.roomName, amountUsd: reconcile.remainderUsd })
         }
@@ -355,6 +356,7 @@ function reconcileFromSession(
   let remainderUsd: number | null = null
   let discrepancyPct: number | null = null
   let flagged = false
+  let acknowledged = false
   let blank: string | null = null
 
   if (session?.profitUsd === null) {
@@ -368,6 +370,15 @@ function reconcileFromSession(
     const base = Math.max(Math.abs(session.profitUsd), Math.abs(tournamentProfitUsdValue), 1)
     discrepancyPct = Math.abs(remainderUsd) / base
     flagged = discrepancyPct > DISCREPANCY_THRESHOLD
+    // An acknowledgement only covers the exact residual the user saw. If the
+    // ledger moved since (balance edit, retrospective import, casino row), the
+    // stored number no longer matches and the day is flagged again — this is the
+    // guard against a "silent rot" of accepted discrepancies.
+    const ack = getAck(room.id, date)
+    if (ack !== null && ack.remainderUsd === remainderUsd) {
+      acknowledged = true
+      flagged = false
+    }
   }
 
   return {
@@ -380,6 +391,7 @@ function reconcileFromSession(
     remainderUsd,
     discrepancyPct,
     flagged,
+    acknowledged,
     blank
   }
 }
@@ -729,4 +741,40 @@ export function writeoffDiscrepancy(roomId: number, date: string, comment: strin
   if (!text) throw new HttpError(400, 'comment: обязательно укажите причину списания')
   if (text.length > 500) throw new HttpError(400, 'comment: не более 500 символов')
   return withTransaction(() => applyWriteoff(roomId, date, reason, text))
+}
+
+/**
+ * Accept a day's residual instead of writing it off.
+ *
+ * No ledger row is created: the user says "these money cannot be explained, and
+ * I did not spend them". The server computes `R` itself (never trusting the
+ * client) and stores it in `reconcile_acks`; `reconcileDay` then reports the day
+ * as `acknowledged` — no flag, no orphaned row in «Транзакции» — for as long as
+ * `R` stays exactly the accepted number.
+ *
+ * Refused when there is no measured balance (`blank`) or nothing to accept:
+ * accepting a remainder inside the 5% tolerance would just hide a day that is
+ * already considered reconciled.
+ */
+export function acknowledgeDiscrepancy(roomId: number, date: string, note?: unknown): DayReconcile {
+  getRoom(roomId)
+  if (!isValidDayKey(date)) throw new HttpError(400, 'date: must be a valid YYYY-MM-DD day')
+  const text = validateAckNote(note)
+  const reconcile = reconcileDay(roomId, date)
+  if (reconcile.blank) throw new HttpError(400, reconcile.blank)
+  if (reconcile.remainderUsd === null) throw new HttpError(400, 'Нечего принимать: расхождение не рассчитано')
+  if (reconcile.remainderUsd === 0) throw new HttpError(400, 'Расхождения нет — принимать нечего')
+  if (!reconcile.flagged && !reconcile.acknowledged) {
+    throw new HttpError(400, 'Расхождение в пределах 5% — принимать нечего')
+  }
+  saveAck(roomId, date, reconcile.remainderUsd, text)
+  return reconcileDay(roomId, date)
+}
+
+/** "Вернуть расхождение": drop the acknowledgement; the flag comes back if the math is still off. */
+export function revokeDiscrepancyAck(roomId: number, date: string): DayReconcile {
+  getRoom(roomId)
+  if (!isValidDayKey(date)) throw new HttpError(400, 'date: must be a valid YYYY-MM-DD day')
+  if (!deleteAck(roomId, date)) throw new HttpError(404, 'Принятое расхождение не найдено')
+  return reconcileDay(roomId, date)
 }

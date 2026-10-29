@@ -201,6 +201,16 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ roomId, date })
       }).then((r) => r.reconcile),
+    acknowledgeDiscrepancy: (roomId: number, date: string, note?: string) =>
+      request<{ reconcile: DayReconcile }>('/tournaments/acknowledge-discrepancy', {
+        method: 'POST',
+        body: JSON.stringify({ roomId, date, note })
+      }).then((r) => r.reconcile),
+    revokeDiscrepancyAck: (roomId: number, date: string) =>
+      request<{ reconcile: DayReconcile }>('/tournaments/acknowledge-discrepancy', {
+        method: 'DELETE',
+        body: JSON.stringify({ roomId, date })
+      }).then((r) => r.reconcile),
     summary: (dateFrom: string, dateTo: string, roomIds?: number[]) =>
       request<{ summary: TournamentSummary; mbr: MbrSummary }>(
         `/tournaments/summary${queryString({ dateFrom, dateTo, roomIds: roomIds && roomIds.length > 0 ? roomIds.join(',') : undefined })}`

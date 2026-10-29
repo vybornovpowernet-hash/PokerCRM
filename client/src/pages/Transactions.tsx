@@ -69,6 +69,7 @@ export default function TransactionsPage() {
   const [writeoffReason, setWriteoffReason] = useState<WriteoffReason>('casino')
   const [writeoffBusy, setWriteoffBusy] = useState(false)
   const [writeoffError, setWriteoffError] = useState<string | null>(null)
+  const [ackBusy, setAckBusy] = useState<string | null>(null)
   const [filter, setFilter] = useState<{ type: TransactionType | ''; roomId: number | ''; dateFrom: string; dateTo: string }>({
     type: '',
     roomId: '',
@@ -237,6 +238,23 @@ export default function TransactionsPage() {
       setWriteoffError(e instanceof Error ? e.message : 'Не удалось списать расхождение')
     } finally {
       setWriteoffBusy(false)
+    }
+  }
+
+  async function acknowledgeDiscrepancy(d: OrphanedDiscrepancy) {
+    const key = `${d.roomId}:${d.date}`
+    if (ackBusy !== null) return
+    setAckBusy(key)
+    setError(null)
+    try {
+      // The server records the exact residual it computes — no fake casino row,
+      // the balance stays untouched and the day simply stops being flagged.
+      await api.tournaments.acknowledgeDiscrepancy(d.roomId, d.date)
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось принять расхождение')
+    } finally {
+      setAckBusy(null)
     }
   }
 
@@ -478,7 +496,7 @@ export default function TransactionsPage() {
                     <td className="whitespace-nowrap px-4 py-3 text-right text-slate-500">—</td>
                     <td className="px-4 py-3 text-slate-500">—</td>
                     <td className="px-4 py-3 text-xs text-amber-300/90">
-                      Баланс не сходится с турнирами — внеси турниры или спиши это расхождение
+                      Баланс не сходится с турнирами — внеси турниры, спиши или прими это расхождение
                     </td>
                     <td className="w-[190px] whitespace-nowrap px-4 py-3 text-right">
                       <div className="flex justify-end gap-2">
@@ -492,6 +510,14 @@ export default function TransactionsPage() {
                           className="rounded px-2 py-1 text-xs text-amber-400 transition hover:bg-amber-950/40 hover:text-amber-300"
                         >
                           Списать
+                        </button>
+                        <button
+                          onClick={() => acknowledgeDiscrepancy(d)}
+                          disabled={ackBusy !== null}
+                          title="Принять расхождение: деньги остаются как есть, профит дня будет считаться только по турнирам"
+                          className="rounded px-2 py-1 text-xs text-slate-400 transition hover:bg-slate-800/60 hover:text-slate-200 disabled:opacity-40"
+                        >
+                          {ackBusy === `${d.roomId}:${d.date}` ? '…' : 'Принять'}
                         </button>
                       </div>
                     </td>

@@ -382,6 +382,29 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
     }
   }
 
+  async function revokeAck() {
+    if (busyRef.current) return
+    busyRef.current = true
+    setError(null)
+    setBusy(true)
+    try {
+      await api.tournaments.revokeDiscrepancyAck(roomId, date)
+      // the acknowledgement is gone — re-run the preview so the panel shows the
+      // real state of the day (flagged again if the math is still off)
+      const res = await api.tournaments.preview(roomId, date, collectLines(), imports)
+      if (!mountedRef.current) return
+      setReconcile(res.reconcile)
+      setWouldReanchor(res.wouldReanchor)
+      setWriteoffChoice(false)
+      onChanged()
+    } catch (e) {
+      if (mountedRef.current) setError(e instanceof Error ? e.message : 'Failed')
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div className="max-h-[90vh] w-full max-w-xl space-y-4 overflow-y-auto rounded-xl border border-slate-700 bg-slate-800 p-6 shadow-2xl shadow-black/60">
@@ -617,7 +640,7 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
         </div>
 
         {reconcile && (
-          <div className={`space-y-3 rounded-xl border p-4 ${reconcile.flagged ? 'border-amber-800 bg-amber-950/30' : 'border-emerald-900 bg-emerald-950/30'}`}>
+          <div className={`space-y-3 rounded-xl border p-4 ${reconcile.flagged ? 'border-amber-800 bg-amber-950/30' : reconcile.acknowledged ? 'border-slate-700 bg-slate-900/40' : 'border-emerald-900 bg-emerald-950/30'}`}>
             {wouldReanchor && (
               <p className="text-xs text-slate-400">
                 Баланс {wouldReanchor.from} будет привязан к {wouldReanchor.to} при сохранении — сверка выполняется на этот день.
@@ -689,6 +712,19 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
                     ))}
                   </div>
                 )}
+              </div>
+            ) : reconcile.acknowledged ? (
+              <div className="space-y-2">
+                <p className="text-xs text-slate-300">
+                  Расхождение принято: остаток не списан и деньги остались как есть — профит дня показывает только турниры.
+                </p>
+                <button
+                  onClick={revokeAck}
+                  disabled={busy || importBusy || textBusy || importBlocked}
+                  className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-200 transition hover:border-slate-500 disabled:opacity-40"
+                >
+                  Вернуть расхождение
+                </button>
               </div>
             ) : reconcile.blank ? (
               // no basis to compare (no balance / only an interpolated one / no rate) — say why instead of a green "сходится"

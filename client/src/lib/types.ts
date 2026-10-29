@@ -172,6 +172,8 @@ export interface RoomProfit {
   flowOutUsd: number
   profitUsd: number | null
   casinoUsd: number
+  /** The residual the user accepted and that still matches the day's math (0 when none). */
+  acknowledgedUsd: number
   pokerProfitUsd: number | null
   convertible: boolean
 }
@@ -303,6 +305,8 @@ export interface DayReconcile {
   remainderUsd: number | null
   discrepancyPct: number | null
   flagged: boolean
+  /** The residual was explicitly accepted (no casino row): the day is not flagged. */
+  acknowledged: boolean
   blank: string | null
 }
 
@@ -312,6 +316,7 @@ export interface ReconcileFlag {
   roomName: string
   tournamentCount: number
   flagged: boolean
+  acknowledged: boolean
   remainderUsd: number | null
 }
 

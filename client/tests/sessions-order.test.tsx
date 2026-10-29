@@ -46,6 +46,7 @@ function day(date: string, totalUsd: number): SessionDay {
         flowOutUsd: 0,
         profitUsd: totalUsd,
         casinoUsd: 0,
+        acknowledgedUsd: 0,
         pokerProfitUsd: totalUsd,
         convertible: true
       }
@@ -121,6 +122,7 @@ describe('SessionsPage: newest day on top', () => {
             flowOutUsd: 0,
             profitUsd: 7000,
             casinoUsd: -3000,
+            acknowledgedUsd: 0,
             pokerProfitUsd: 10000,
             convertible: true
           }
@@ -135,5 +137,37 @@ describe('SessionsPage: newest day on top', () => {
     expect(screen.queryByText('+$70.00')).toBeNull()
     // казино показано отдельной строкой-подписью
     expect(screen.getByText('↳ Казино: −$30.00')).toBeTruthy()
+  })
+
+  it('keeps an accepted residual out of the profit and explains it separately', async () => {
+    mocks.sessionsList.mockResolvedValue([
+      {
+        date: '2026-10-22',
+        totalUsd: -37,
+        rooms: [
+          {
+            roomId: room.id,
+            roomName: room.name,
+            currency: 'USD',
+            delta: -3508,
+            flowInUsd: 0,
+            flowOutUsd: 0,
+            profitUsd: -3508,
+            casinoUsd: 0,
+            acknowledgedUsd: -3471,
+            pokerProfitUsd: -37,
+            convertible: true
+          }
+        ]
+      }
+    ])
+    render(<SessionsPage />)
+
+    await waitFor(() => expect(renderedDates()).toHaveLength(1))
+    // «Профит» — только турниры (-$0.37), принятый остаток в него не входит
+    expect(screen.getByText('−$0.37')).toBeTruthy()
+    expect(screen.queryByText('−$35.08')).toBeNull()
+    // а сам остаток виден нейтральной подписью, чтобы дельта и профит не выглядели загадкой
+    expect(screen.getByText('↳ принято расхождение: −$34.71')).toBeTruthy()
   })
 })

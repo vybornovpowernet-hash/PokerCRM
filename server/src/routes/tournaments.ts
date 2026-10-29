@@ -3,12 +3,14 @@ import { HttpError } from '../lib/errors.js'
 import { isValidDayKey, dayKey } from '../lib/date.js'
 import { parseId } from '../lib/http.js'
 import {
+  acknowledgeDiscrepancy,
   adjustBalanceToTournaments,
   deleteImportedTournament,
   listDayTournaments,
   previewDayReconcile,
   reconcileDay,
   reconcileSummary,
+  revokeDiscrepancyAck,
   saveDayBatch,
   writeoffRemainder
 } from '../services/tournaments.js'
@@ -174,5 +176,21 @@ export async function tournamentsRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: { roomId: number; date: string; reason?: string } }>('/api/tournaments/writeoff', async (req) => {
     const { roomId, date } = req.body
     return { reconcile: writeoffRemainder(parseId(roomId), date, validateWriteoffReason(req.body.reason)) }
+  })
+
+  /**
+   * Accept a day's discrepancy instead of writing it off — the ledger stays
+   * untouched (no casino row). The server computes the residual itself and
+   * records the exact value, so a later change re-opens the day automatically.
+   */
+  app.post<{ Body: { roomId: number; date: string; note?: string } }>('/api/tournaments/acknowledge-discrepancy', async (req) => {
+    const { roomId, date, note } = req.body
+    return { reconcile: acknowledgeDiscrepancy(parseId(roomId), date, note) }
+  })
+
+  /** «Вернуть расхождение»: drop the acknowledgement and re-flag the day. */
+  app.delete<{ Body: { roomId: number; date: string } }>('/api/tournaments/acknowledge-discrepancy', async (req) => {
+    const { roomId, date } = req.body
+    return { reconcile: revokeDiscrepancyAck(parseId(roomId), date) }
   })
 }

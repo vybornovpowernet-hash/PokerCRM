@@ -547,6 +547,23 @@ const MIGRATIONS: string[] = [
   ALTER TABLE transactions ADD COLUMN writeoff_reason TEXT;
   UPDATE transactions SET writeoff_reason = 'casino' WHERE writeoff = 1;
   `,
+  // v32: a day whose math cannot be explained can be explicitly forgiven instead
+  // of being closed with a fake casino row. `reconcile_acks` stores the user's
+  // decision together with the EXACT residual (`remainder_usd`, min units of USD)
+  // that was accepted: the flag is suppressed only while `R = S − T − X` still
+  // equals that number, so any later change to the balance, tournaments or casino
+  // rows brings the discrepancy back — an acknowledgement can never silently rot.
+  `
+  CREATE TABLE IF NOT EXISTS reconcile_acks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    remainder_usd INTEGER NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (room_id, date)
+  );
+  `,
 ]
 
 let dbInstance: DatabaseSync | undefined

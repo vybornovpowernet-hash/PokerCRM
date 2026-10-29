@@ -180,6 +180,12 @@ export default function SessionsPage() {
                     {r.casinoUsd < 0 && (
                       <div className="mt-0.5 text-xs tabular-nums text-rose-400/80">↳ Казино: −{formatAmount(Math.abs(r.casinoUsd), 'USD')}</div>
                     )}
+                    {r.acknowledgedUsd !== 0 && (
+                      <div className="mt-0.5 text-xs tabular-nums text-slate-500" title="Расхождение принято пользователем: деньги не списаны и в профит не входят">
+                        ↳ принято расхождение: {r.acknowledgedUsd < 0 ? '−' : '+'}
+                        {formatAmount(Math.abs(r.acknowledgedUsd), 'USD')}
+                      </div>
+                    )}
                   </div>
                   <div className={`${deltaCellCls} tabular-nums ${r.convertible && r.delta !== null ? 'text-slate-300' : 'text-amber-400/80'}`}>
                     {r.convertible && r.delta !== null ? formatAmount(r.delta, r.currency) : 'нет курса'}

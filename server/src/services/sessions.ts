@@ -3,6 +3,9 @@ import { isValidDayKey } from '../lib/date.js'
 import { getDb } from '../db.js'
 import { getBalance, getBalanceBefore, flowsUsdRange, roomFlowsUsd } from './balances.js'
 import { convertCross, convertToUsd, withRateCache } from './rates/convert.js'
+import { tournamentProfitUsd } from './tournamentProfit.js'
+import type { TournamentProfitRow } from './tournamentProfit.js'
+import { acksInRange, getAck } from './reconcileAcks.js'
 import type { BalanceEntry, CashFlow } from './balances.js'
 
 export interface RoomProfit {
@@ -25,8 +28,13 @@ export interface RoomProfit {
   /** Signed casino P&L of the day in USD (0 when none) — the part of the
    *  balance delta that is gaming, not poker, shown for reference in «Сессии». */
   casinoUsd: number
-  /** Pure poker result: `profitUsd − casinoUsd`. What the «Профит» column and
-   *  the day/KPI totals display, so chips never masquerade as poker play. */
+  /** The residual the user explicitly accepted (`reconcile_acks`) and that still
+   *  matches `profitUsd − tournaments − casinoUsd`, in USD (0 when none). It is
+   *  forgiven, not spent: excluded from `pokerProfitUsd`, never a casino row. */
+  acknowledgedUsd: number
+  /** Pure poker result: `profitUsd − casinoUsd − acknowledgedUsd`. What the
+   *  «Профит» column and the day/KPI totals display, so chips never masquerade
+   *  as poker play and an accepted residual never shows up as a phantom loss. */
   pokerProfitUsd: number | null
   convertible: boolean
 }
@@ -40,8 +48,19 @@ export interface SessionDay {
 
 const EMPTY_FLOW: CashFlow = { inUsd: 0, outUsd: 0, convertible: true }
 
-/** Day profit of one room from an already-fetched previous balance and flows. */
-function buildRoomProfit(entry: BalanceEntry, prev: BalanceEntry | null, flows: CashFlow, casinoUsd: number): RoomProfit {
+/** Day profit of one room from an already-fetched previous balance and flows.
+ *
+ *  `tournamentUsd` and `ackRemainder` let the acknowledgment be re-validated
+ *  here: the stored residual is only subtracted when it still equals
+ *  `S − T − X`, exactly the same comparison `reconcileFromSession` makes. */
+function buildRoomProfit(
+  entry: BalanceEntry,
+  prev: BalanceEntry | null,
+  flows: CashFlow,
+  casinoUsd: number,
+  tournamentUsd: number,
+  ackRemainder: number | null
+): RoomProfit {
   let prevAmount = prev ? prev.amount : 0
   let prevResolved = true
   if (prev && prev.currency !== entry.currency) {
@@ -56,6 +75,8 @@ function buildRoomProfit(entry: BalanceEntry, prev: BalanceEntry | null, flows: 
   const deltaUsd = delta === null ? null : convertToUsd(delta, entry.currency, entry.date, entry.roomId)
   const convertible = deltaUsd !== null && flows.convertible
   const profitUsd = convertible ? (deltaUsd as number) - (flows.inUsd - flows.outUsd) : null
+  const remainderUsd = profitUsd !== null ? profitUsd - tournamentUsd - casinoUsd : null
+  const acknowledgedUsd = remainderUsd !== null && ackRemainder !== null && ackRemainder === remainderUsd ? remainderUsd : 0
   return {
     roomId: entry.roomId,
     roomName: entry.roomName,
@@ -66,7 +87,8 @@ function buildRoomProfit(entry: BalanceEntry, prev: BalanceEntry | null, flows: 
     flowOutUsd: flows.outUsd,
     profitUsd,
     casinoUsd,
-    pokerProfitUsd: profitUsd !== null ? profitUsd - casinoUsd : null,
+    acknowledgedUsd,
+    pokerProfitUsd: profitUsd !== null ? profitUsd - casinoUsd - acknowledgedUsd : null,
     convertible
   }
 }
@@ -84,10 +106,27 @@ function casinoUsdFor(roomId: number, date: string): number {
   return total
 }
 
+/** Tournament profit of a room on a day, in USD — the `T` of `R = S − T − X`. */
+function tournamentProfitFor(roomId: number, date: string): number {
+  const rows = getDb()
+    .prepare('SELECT room_id, date, buyin, result, currency FROM tournaments WHERE room_id = ? AND date = ?')
+    .all(roomId, date) as unknown as { room_id: number; date: string; buyin: number; result: number; currency: string }[]
+  return tournamentProfitUsd(
+    rows.map((row) => ({ roomId: row.room_id, date: row.date, buyin: row.buyin, result: row.result, currency: row.currency }))
+  )
+}
+
 /** Per-room day profit, all converted to USD. */
 export function computeRoomProfit(entry: BalanceEntry): RoomProfit {
   const prev = getBalanceBefore(entry.roomId, entry.date)
-  return buildRoomProfit(entry, prev, roomFlowsUsd(entry.roomId, entry.date), casinoUsdFor(entry.roomId, entry.date))
+  return buildRoomProfit(
+    entry,
+    prev,
+    roomFlowsUsd(entry.roomId, entry.date),
+    casinoUsdFor(entry.roomId, entry.date),
+    tournamentProfitFor(entry.roomId, entry.date),
+    getAck(entry.roomId, entry.date)?.remainderUsd ?? null
+  )
 }
 
 /** Session profit of a single room on a single day. */
@@ -139,6 +178,19 @@ export function sessionsInRange(dateFrom: string, dateTo: string): SessionDay[] 
 
     const flows = flowsUsdRange(dateFrom, dateTo)
 
+    const tournamentRowsByKey = new Map<string, TournamentProfitRow[]>()
+    for (const row of getDb()
+      .prepare('SELECT room_id, date, buyin, result, currency FROM tournaments WHERE date >= ? AND date <= ?')
+      .all(dateFrom, dateTo) as unknown as { room_id: number; date: string; buyin: number; result: number; currency: string }[]) {
+      const key = `${row.room_id}:${row.date}`
+      const mapped: TournamentProfitRow = { roomId: row.room_id, date: row.date, buyin: row.buyin, result: row.result, currency: row.currency }
+      const list = tournamentRowsByKey.get(key)
+      if (list) list.push(mapped)
+      else tournamentRowsByKey.set(key, [mapped])
+    }
+
+    const acks = acksInRange(dateFrom, dateTo)
+
     const casinoByKey = new Map<string, number>()
     for (const row of getDb()
       .prepare("SELECT room_id, date, amount, currency FROM transactions WHERE type = 'casino' AND date >= ? AND date <= ?")
@@ -162,7 +214,15 @@ export function sessionsInRange(dateFrom: string, dateTo: string): SessionDay[] 
       lastByRoom.set(entry.roomId, entry)
       if (entry.source !== 'manual' && !gaming.has(`${entry.roomId}:${entry.date}`)) continue
       const flow = flows.get(`${entry.roomId}:${entry.date}`) ?? EMPTY_FLOW
-      const profit = buildRoomProfit(entry, prev, flow, casinoByKey.get(`${entry.roomId}:${entry.date}`) ?? 0)
+      const key = `${entry.roomId}:${entry.date}`
+      const profit = buildRoomProfit(
+        entry,
+        prev,
+        flow,
+        casinoByKey.get(key) ?? 0,
+        tournamentProfitUsd(tournamentRowsByKey.get(key) ?? []),
+        acks.get(key) ?? null
+      )
       const list = byDate.get(entry.date)
       if (list) list.push(profit)
       else byDate.set(entry.date, [profit])

@@ -11,7 +11,8 @@ const mocks = vi.hoisted(() => ({
   adjustBalance: vi.fn(),
   importGg: vi.fn(),
   importPokerDom: vi.fn(),
-  deleteImport: vi.fn()
+  deleteImport: vi.fn(),
+  revokeDiscrepancyAck: vi.fn()
 }))
 
 vi.mock('../src/lib/api', () => ({
@@ -23,7 +24,8 @@ vi.mock('../src/lib/api', () => ({
       adjustBalance: mocks.adjustBalance,
       importGg: mocks.importGg,
       importPokerDom: mocks.importPokerDom,
-      deleteImport: mocks.deleteImport
+      deleteImport: mocks.deleteImport,
+      revokeDiscrepancyAck: mocks.revokeDiscrepancyAck
     }
   }
 }))
@@ -271,6 +273,7 @@ describe('TournamentPopup — списание остатка с причино�
     remainderUsd: 200_00,
     discrepancyPct: 1,
     flagged: true,
+    acknowledged: false,
     blank: null
   }
   const closed = { ...flagged, remainderUsd: 0, discrepancyPct: 0, flagged: false, casinoUsd: 200_00 }
@@ -354,6 +357,27 @@ describe('TournamentPopup — списание остатка с причино�
     // nothing to write off or adjust — the fix is recording the balance itself
     expect(screen.queryByRole('button', { name: 'Списать остаток…' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Поправить баланс' })).toBeNull()
+  })
+
+  it('shows an accepted day without offering a write-off, and can hand it back', async () => {
+    const accepted = { ...flagged, flagged: false, acknowledged: true }
+    const reflagged = { ...flagged, acknowledged: false }
+    mocks.list.mockResolvedValue([])
+    mocks.preview.mockResolvedValueOnce({ reconcile: accepted, wouldReanchor: null }).mockResolvedValueOnce({ reconcile: reflagged, wouldReanchor: null })
+    mocks.revokeDiscrepancyAck.mockResolvedValue(reflagged)
+    const user = userEvent.setup()
+    renderPopup(pokerdom)
+
+    await user.click(screen.getByRole('button', { name: 'Проверить' }))
+    expect(await screen.findByText(/Расхождение принято/)).toBeTruthy()
+    // accepting is not spending: no casino write-off is offered on such a day
+    expect(screen.queryByRole('button', { name: 'Списать остаток…' })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Вернуть расхождение' }))
+    await waitFor(() => expect(mocks.revokeDiscrepancyAck).toHaveBeenCalledWith(1, '2026-09-16'))
+    // the re-computed state is shown as is: the flag is back with the write-off choice
+    expect(await screen.findByText(/Расхождение 100%/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Списать остаток…' })).toBeTruthy()
   })
 })
 
