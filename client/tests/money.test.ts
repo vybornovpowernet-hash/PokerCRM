@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { formatAmount, formatSignedAmount, formatUnits, normalizeAmountInput, parseUnits } from '../src/lib/money'
+import {
+  caretAfterSignificant,
+  countSignificant,
+  formatAmount,
+  formatSignedAmount,
+  formatThousands,
+  formatUnits,
+  normalizeAmountInput,
+  parseUnits
+} from '../src/lib/money'
 import { TRANSACTION_TYPE_LABELS } from '../src/lib/types'
 
 describe('money', () => {
@@ -24,6 +33,37 @@ describe('money', () => {
     expect(formatUnits(-10_25)).toBe('-10.25')
     expect(formatUnits(5)).toBe('0.05')
     expect(formatAmount(-10_25, 'USD')).toBe('$-10.25')
+  })
+
+  it('groups thousands with non-breaking spaces', () => {
+    expect(formatThousands('')).toBe('')
+    expect(formatThousands('7')).toBe('7')
+    expect(formatThousands('1234')).toBe('1\u00A0234')
+    expect(formatThousands('1234567')).toBe('1\u00A0234\u00A0567')
+    expect(formatThousands('1234.5')).toBe('1\u00A0234.5')
+    expect(formatThousands('1234.')).toBe('1\u00A0234.')
+    expect(formatThousands('0.05')).toBe('0.05')
+    expect(formatThousands(-1234)).toBe('-1\u00A0234')
+    expect(formatUnits(123_456_789)).toBe('1\u00A0234\u00A0567.89')
+    expect(formatSignedAmount(1_213_866, 'USD')).toBe('$12\u00A0138.66')
+  })
+
+  it('parses grouped input back into min units', () => {
+    expect(parseUnits('1 234.56')).toBe(1234_56)
+    expect(parseUnits('1\u00A0234.56')).toBe(1234_56)
+    expect(parseUnits('1\u00A0234\u00A0567')).toBe(123_456_700)
+  })
+
+  it('keeps the caret anchored to the same significant character', () => {
+    expect(countSignificant('12 151.5')).toBe(7)
+    expect(countSignificant('')).toBe(0)
+    expect(caretAfterSignificant('1 234', 5)).toBe(5)
+    expect(caretAfterSignificant('12 151', 3)).toBe(4)
+    expect(caretAfterSignificant('1 234', 0)).toBe(0)
+    expect(caretAfterSignificant('1 234', 99)).toBe(5)
+    expect(countSignificant(normalizeAmountInput('.'))).toBe(2)
+    expect(caretAfterSignificant('0.', countSignificant(normalizeAmountInput('.')))).toBe(2)
+    expect(countSignificant(normalizeAmountInput('123,'))).toBe(4)
   })
 
   it('labels the casino transaction type', () => {

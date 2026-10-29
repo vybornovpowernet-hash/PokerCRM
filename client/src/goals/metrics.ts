@@ -1,4 +1,7 @@
+import { formatThousands } from '../lib/money'
 import type { ChecklistStatus, Goal, GoalMetric, GoalStatus } from './goals.types'
+
+export const groupThousands = formatThousands
 
 export const STATUS_LABELS: Record<GoalStatus, string> = {
   active: 'В процессе',
@@ -22,17 +25,6 @@ export function pluralTournaments(n: number): string {
   if (mod10 === 1 && mod100 !== 11) return 'турнир'
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'турнира'
   return 'турниров'
-}
-
-export function groupThousands(n: number): string {
-  const sign = n < 0 ? '-' : ''
-  const digits = String(Math.abs(n))
-  let out = ''
-  for (let i = 0; i < digits.length; i++) {
-    if (i > 0 && (digits.length - i) % 3 === 0) out += ' '
-    out += digits[i]
-  }
-  return `${sign}${out}`
 }
 
 export function formatMoneyUsd(amount: number): string {

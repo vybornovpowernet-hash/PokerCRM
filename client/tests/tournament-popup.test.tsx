@@ -82,7 +82,7 @@ describe('TournamentPopup — PokerDom text-imported tournaments', () => {
     renderPopup(pokerdom)
 
     await waitFor(() => expect(shownForm('Бай-ин строки 1').value).toBe('500.00'))
-    expect(shownForm('Результат строки 1').value).toBe('1288.05')
+    expect(shownForm('Результат строки 1').value).toBe('1\u00A0288.05')
     expect(shownForm('Бай-ин строки 2').value).toBe('250.00')
     expect(shownForm('Результат строки 2').value).toBe('50.00')
     // the empty trailing row is still there for adding more

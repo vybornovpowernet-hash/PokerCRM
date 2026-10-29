@@ -146,7 +146,7 @@ describe('BalancesPage — delta input', () => {
 
     const input = (await screen.findByLabelText('Новый баланс Bybit')) as HTMLInputElement
     await user.type(input, '1234,56')
-    expect(input.value).toBe('1234.56')
+    expect(input.value).toBe('1\u00A0234.56')
 
     await user.click(screen.getByRole('button', { name: 'Записать баланс Bybit' }))
 
@@ -155,7 +155,7 @@ describe('BalancesPage — delta input', () => {
 
     await waitFor(() => expect(input.value).toBe(''))
     expect(await screen.findByRole('status')).toHaveProperty('textContent', 'Баланс Bybit записан')
-    expect(screen.getAllByText('$1234.56').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('$1\u00A0234.56', { normalizer: (text) => text }).length).toBeGreaterThan(0)
   })
 
   it('marks a negative balance with a subtle accent instead of a plain number', async () => {
@@ -175,7 +175,7 @@ describe('BalancesPage — распределение банкролла', () =>
 
     expect(await screen.findByLabelText('Распределение банкролла по румам')).toBeTruthy()
     expect(screen.getByText('Распределение банкролла')).toBeTruthy()
-    expect(screen.getByText('$73999.21')).toBeTruthy()
+    expect(screen.getByText('$73\u00A0999.21', { normalizer: (text) => text })).toBeTruthy()
 
     expect(screen.getByText('73%')).toBeTruthy()
     expect(screen.getByText('27%')).toBeTruthy()

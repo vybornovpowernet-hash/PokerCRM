@@ -21,9 +21,9 @@ describe('goals metrics formatting', () => {
   it('groups thousands with spaces', () => {
     expect(groupThousands(0)).toBe('0')
     expect(groupThousands(100)).toBe('100')
-    expect(groupThousands(5000)).toBe('5 000')
-    expect(groupThousands(1234567)).toBe('1 234 567')
-    expect(groupThousands(-1234)).toBe('-1 234')
+    expect(groupThousands(5000)).toBe('5\u00A0000')
+    expect(groupThousands(1234567)).toBe('1\u00A0234\u00A0567')
+    expect(groupThousands(-1234)).toBe('-1\u00A0234')
   })
 
   it('pluralises the Russian tournament noun', () => {
@@ -38,20 +38,20 @@ describe('goals metrics formatting', () => {
 
   it('formats money in USD min units, dropping zero kopecks', () => {
     expect(formatMoneyUsd(0)).toBe('$0')
-    expect(formatMoneyUsd(500000)).toBe('$5 000')
-    expect(formatMoneyUsd(500050)).toBe('$5 000.50')
-    expect(formatMoneyUsd(123456789)).toBe('$1 234 567.89')
+    expect(formatMoneyUsd(500000)).toBe('$5\u00A0000')
+    expect(formatMoneyUsd(500050)).toBe('$5\u00A0000.50')
+    expect(formatMoneyUsd(123456789)).toBe('$1\u00A0234\u00A0567.89')
   })
 
   it('labels targets by metric', () => {
-    expect(targetLabel({ metric: 'bankroll', targetUnits: 500000 })).toBe('$5 000')
+    expect(targetLabel({ metric: 'bankroll', targetUnits: 500000 })).toBe('$5\u00A0000')
     expect(targetLabel({ metric: 'distance', targetUnits: 100 })).toBe('100 турниров')
     expect(targetLabel({ metric: 'distance', targetUnits: 1 })).toBe('1 турнир')
     expect(targetLabel({ metric: 'custom', targetUnits: 1 })).toBe('')
   })
 
   it('labels current values by metric', () => {
-    expect(currentLabel('bankroll', 342130)).toBe('$3 421.30')
+    expect(currentLabel('bankroll', 342130)).toBe('$3\u00A0421.30')
     expect(currentLabel('distance', 57)).toBe('57 турниров')
     expect(currentLabel('custom', 0)).toBe('')
   })
@@ -67,7 +67,7 @@ describe('goals metrics formatting', () => {
   })
 
   it('builds the goal phrase', () => {
-    expect(goalPhrase({ metric: 'bankroll', targetUnits: 500000 })).toBe('Банкролл до $5 000')
+    expect(goalPhrase({ metric: 'bankroll', targetUnits: 500000 })).toBe('Банкролл до $5\u00A0000')
     expect(goalPhrase({ metric: 'distance', targetUnits: 21 })).toBe('Сыграть 21 турнир')
     expect(goalPhrase({ metric: 'custom', targetUnits: 1, title: 'Выучить испанский' })).toBe('Выучить испанский')
     expect(goalPhrase({ metric: 'custom', targetUnits: 1, title: '  слайд  ' })).toBe('слайд')

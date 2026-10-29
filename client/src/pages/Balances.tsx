@@ -1,7 +1,15 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api } from '../lib/api'
-import { formatAmount, formatSignedAmount, normalizeAmountInput, parseUnits } from '../lib/money'
+import {
+  caretAfterSignificant,
+  countSignificant,
+  formatAmount,
+  formatSignedAmount,
+  formatThousands,
+  normalizeAmountInput,
+  parseUnits
+} from '../lib/money'
 import { emitBalancesChanged, onBalancesChanged } from '../lib/events'
 import { TournamentPopup } from '../components/TournamentPopup'
 import { BankrollDistribution } from '../components/BankrollDistribution'
@@ -38,7 +46,7 @@ const RatesCard = memo(function RatesCard({ rates }: { rates: CurrentBalances['r
   return (
     <div className="rounded-xl border border-slate-700 bg-slate-800/80 p-5 shadow-lg shadow-black/40">
       <div className="text-xs uppercase tracking-wider text-slate-500">Курсы</div>
-      <div className="mt-1 space-y-1 text-sm">
+      <div className="mt-1 max-w-[14rem] space-y-1 text-sm">
         <RateLine label="USD/RUB" feed={rates?.usdRub} />
         <RateLine label="EUR/USD" feed={rates?.eurUsd} />
         <RateLine label="USD/CNY" feed={rates?.cnyUsd} />
@@ -73,6 +81,7 @@ const RoomBalanceRow = memo(function RoomBalanceRow({
   onOpenTournaments
 }: RowProps) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const caretRef = useRef<number | null>(null)
   const units = parseUnits(draft)
   const comparable = latest === null || latest.currency === room.cashCurrency
   const currentUnits = latest === null ? 0 : comparable ? latest.amount : null
@@ -82,6 +91,16 @@ const RoomBalanceRow = memo(function RoomBalanceRow({
   const tourneyDate = latest?.date ?? TODAY
   const deltaText = delta !== null && dirty ? `${delta > 0 ? '+' : ''}${formatSignedAmount(delta, room.cashCurrency)}` : ''
   const describedBy = latest ? `balance-current-${room.id} balance-delta-${room.id}` : `balance-delta-${room.id}`
+
+  useLayoutEffect(() => {
+    const target = caretRef.current
+    if (target === null) return
+    caretRef.current = null
+    const el = inputRef.current
+    if (!el) return
+    const pos = caretAfterSignificant(el.value, target)
+    el.setSelectionRange(pos, pos)
+  }, [draft])
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -152,8 +171,13 @@ const RoomBalanceRow = memo(function RoomBalanceRow({
           name={`balance-${room.id}`}
           className={inputCls}
           type="text"
-          value={draft}
-          onChange={(event) => onDraftChange(room.id, normalizeAmountInput(event.target.value))}
+          value={formatThousands(draft)}
+          onChange={(event) => {
+            const raw = event.target.value
+            const caret = event.target.selectionStart ?? raw.length
+            caretRef.current = countSignificant(normalizeAmountInput(raw.slice(0, caret)))
+            onDraftChange(room.id, normalizeAmountInput(raw))
+          }}
           placeholder="Новый баланс"
           inputMode="decimal"
           autoComplete="off"
