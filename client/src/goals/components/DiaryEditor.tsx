@@ -14,7 +14,12 @@ import Underline from '@tiptap/extension-underline'
 import { TextStyle, FontSize } from '@tiptap/extension-text-style'
 import { isDiaryHtml, sanitizeDiaryHtml } from '../diaryHtml'
 
-const HIGHLIGHT_COLORS = ['#fef08a', '#bbf7d0', '#bfdbfe', '#fbcfe8', '#ddd6fe', '#fed7aa', '#fecaca', '#f1f5f9']
+const HIGHLIGHT_COLORS = [
+  '#fef08a', '#fde68a', '#fcd34d', '#fbbf24', '#fed7aa', '#fdba74', '#fb923c', '#fecaca',
+  '#fca5a5', '#f87171', '#fecdd3', '#fb7185', '#fbcfe8', '#f9a8d4', '#f472b6', '#f1f5f9',
+  '#ddd6fe', '#c4b5fd', '#a78bfa', '#e9d5ff', '#c084fc', '#a5b4fc', '#818cf8', '#bfdbfe',
+  '#93c5fd', '#60a5fa', '#7dd3fc', '#67e8f9', '#5eead4', '#34d399', '#86efac', '#bbf7d0'
+]
 
 const FONT_SIZES = [8, 10, 12, 14, 16, 18, 20]
 const DEFAULT_FONT_SIZE = 16
@@ -219,8 +224,8 @@ export function DiaryEditor({ initialContent, onChange, ariaLabel, autofocus = f
           </div>
 
           {paletteOpen && (
-            <div role="menu" aria-label="Цвета маркера" className="absolute left-0 top-full z-20 mt-1 w-36 rounded-lg border border-slate-700/70 bg-slate-900 p-2 shadow-xl">
-              <div className="grid grid-cols-4 gap-1">
+            <div role="menu" aria-label="Цвета маркера" className="absolute right-0 top-full z-20 mt-1 w-60 rounded-lg border border-slate-700/70 bg-slate-900 p-2 shadow-xl">
+              <div className="grid grid-cols-8 gap-1">
                 {HIGHLIGHT_COLORS.map((color) => (
                   <button
                     key={color}
@@ -228,7 +233,7 @@ export function DiaryEditor({ initialContent, onChange, ariaLabel, autofocus = f
                     role="menuitem"
                     aria-label={`Маркер ${color}`}
                     onClick={() => applyHighlight(color)}
-                    className={`h-5 w-8 rounded-md border transition hover:scale-110 ${
+                    className={`h-6 w-6 rounded-md border transition hover:scale-110 ${
                       toolbar.highlight && toolbar.highlightColor === color ? 'border-white/70 ring-1 ring-white/50' : 'border-white/10'
                     }`}
                     style={{ backgroundColor: color }}

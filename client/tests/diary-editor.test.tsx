@@ -116,6 +116,21 @@ describe('DiaryEditor toolbar', () => {
 
     expect(onChange).toHaveBeenLastCalledWith(expect.stringContaining('data-color="#fef08a"'))
   })
+
+  it('offers a bold red in the expanded palette', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<DiaryEditor ariaLabel="Заметка в дневник" initialContent="" onChange={onChange} />)
+
+    const editor = screen.getByLabelText('Заметка в дневник')
+    await user.click(editor)
+    await user.type(editor, 'важное')
+    await user.keyboard('{Control>}a{/Control}')
+    await user.click(screen.getByRole('button', { name: 'Палитра маркера' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Маркер #f87171' }))
+
+    expect(onChange).toHaveBeenLastCalledWith(expect.stringContaining('data-color="#f87171"'))
+  })
 })
 
 describe('sanitizeDiaryHtml', () => {
