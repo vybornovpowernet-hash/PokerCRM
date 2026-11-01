@@ -155,3 +155,35 @@ describe('StatisticsPage activity calendar', () => {
     expect(screen.getByText('2026')).toBeDefined()
   })
 })
+
+describe('StatisticsPage month navigation', () => {
+  function key(d: Date): string {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+
+  it('steps back to a whole previous calendar month', async () => {
+    render(<StatisticsPage />)
+    await waitFor(() => expect(mocks.calendar).toHaveBeenCalled())
+
+    const now = new Date()
+    const first = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+    const last = new Date(now.getFullYear(), now.getMonth(), 0)
+    const statsCalls = mocks.stats.mock.calls.length
+    const calendarCalls = mocks.calendar.mock.calls.length
+
+    fireEvent.click(screen.getByRole('button', { name: 'Предыдущий месяц' }))
+
+    await waitFor(() => expect(mocks.calendar).toHaveBeenLastCalledWith(key(first), key(last), []))
+    // both dates are committed in one render, so the period costs one paired request
+    expect(mocks.stats).toHaveBeenCalledTimes(statsCalls + 1)
+    expect(mocks.calendar).toHaveBeenCalledTimes(calendarCalls + 1)
+  })
+
+  it('disables the forward arrow in the current month', async () => {
+    render(<StatisticsPage />)
+    await waitFor(() => expect(mocks.calendar).toHaveBeenCalled())
+
+    const next = screen.getByRole('button', { name: 'Следующий месяц' }) as HTMLButtonElement
+    expect(next.disabled).toBe(true)
+  })
+})

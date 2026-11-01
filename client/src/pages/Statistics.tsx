@@ -45,9 +45,36 @@ const activeBtn = `${buttonCls} border-slate-500 bg-slate-700 text-slate-100`
 const inactiveBtn = `${buttonCls} border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-100`
 const inputCls =
   'rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-sm text-slate-100 shadow-inner outline-none transition focus:border-slate-500'
+const navBtn =
+  'flex h-[38px] w-9 shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-900/50 text-slate-400 shadow-inner outline-none transition hover:border-slate-500 hover:bg-slate-800/60 hover:text-slate-100 focus-visible:ring-2 focus-visible:ring-slate-500/30 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:border-slate-700 disabled:hover:bg-slate-900/50 disabled:hover:text-slate-400'
 
 function dayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function monthBounds(baseKey: string, delta: number): { from: string; to: string } {
+  const [year, month] = baseKey.split('-').map(Number) as [number, number]
+  const first = new Date(year, month - 1 + delta, 1)
+  const last = new Date(first.getFullYear(), first.getMonth() + 1, 0)
+  return { from: dayKey(first), to: dayKey(last) }
+}
+
+function ChevronIcon({ dir }: { dir: 'left' | 'right' }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={dir === 'left' ? 'm15 18-6-6 6-6' : 'm9 18 6-6-6-6'} />
+    </svg>
+  )
 }
 
 function dayLabel(iso: string): string {
@@ -262,6 +289,15 @@ export default function StatisticsPage() {
     setDateTo(r.to)
   }
 
+  function shiftMonth(delta: number) {
+    const r = monthBounds(dateFrom, delta)
+    setPreset(null)
+    setDateFrom(r.from)
+    setDateTo(r.to)
+  }
+
+  const nextDisabled = monthBounds(dateFrom, 1).from > monthBounds(dayKey(new Date()), 0).from
+
   function toggleRoom(id: number) {
     setSelectedRoomIds((prev) => (prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]))
   }
@@ -325,7 +361,16 @@ export default function StatisticsPage() {
             </button>
           ))}
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-4">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            aria-label="Предыдущий месяц"
+            title="Предыдущий месяц"
+            onClick={() => shiftMonth(-1)}
+            className={navBtn}
+          >
+            <ChevronIcon dir="left" />
+          </button>
           <label className="flex items-center gap-2">
             <span className="text-sm text-slate-400">Начало</span>
             <input
@@ -350,6 +395,16 @@ export default function StatisticsPage() {
               }}
             />
           </label>
+          <button
+            type="button"
+            aria-label="Следующий месяц"
+            title="Следующий месяц"
+            onClick={() => shiftMonth(1)}
+            disabled={nextDisabled}
+            className={navBtn}
+          >
+            <ChevronIcon dir="right" />
+          </button>
         </div>
       </div>
 
