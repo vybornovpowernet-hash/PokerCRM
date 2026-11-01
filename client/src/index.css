@@ -46,6 +46,12 @@ body {
   margin: 0.375rem 0;
 }
 
+.ProseMirror mark {
+  color: #0f172a !important;
+  border-radius: 0.25rem;
+  padding: 0 0.125rem;
+}
+
 .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;

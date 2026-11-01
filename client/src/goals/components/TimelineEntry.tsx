@@ -110,7 +110,7 @@ export function TimelineEntry({ entry, index, readonly, busy, onEdit, onDelete }
             <div className="flex items-start gap-2">
               {isUser && isDiaryHtml(entry.content) ? (
                 <div
-                  className="min-w-0 flex-1 break-words text-base leading-relaxed text-slate-300 [&_mark]:rounded-sm [&_mark]:bg-yellow-300/40 [&_mark]:px-0.5 [&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
+                  className="min-w-0 flex-1 break-words text-base leading-relaxed text-slate-300 [&_mark]:rounded-sm [&_mark]:bg-yellow-300/40 [&_mark]:px-0.5 [&_mark]:text-slate-900 [&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
                   dangerouslySetInnerHTML={{ __html: sanitizeDiaryHtml(entry.content) }}
                 />
               ) : (
