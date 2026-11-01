@@ -29,15 +29,13 @@ function RateLine({ label, feed }: { label: string; feed?: RateInfo }) {
   const dot = state === 'unknown' ? 'bg-slate-600' : state === 'stale' ? 'bg-amber-400' : 'bg-emerald-500'
   const status = state === 'unknown' ? 'нет данных' : state === 'stale' ? 'устарел' : 'актуально'
   return (
-    <div className="flex items-baseline justify-between gap-2 text-slate-200">
-      <span className="flex items-baseline gap-1.5">
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <div className="flex items-baseline gap-2 text-slate-200">
         <span className="text-slate-500">{label}</span>
-        {feed?.date && <span className="text-[11px] text-slate-600">{feed.date}</span>}
-      </span>
-      <span className="flex items-baseline gap-2">
         <span className="tabular-nums">{feed?.rate != null ? feed.rate.toFixed(4) : '—'}</span>
         <span role="img" aria-label={status} title={`Курс ${status}`} className={`inline-block h-1.5 w-1.5 rounded-full ${dot}`} />
-      </span>
+      </div>
+      {feed?.date ? <span className="text-[11px] text-slate-600">{feed.date}</span> : null}
     </div>
   )
 }
@@ -46,17 +44,17 @@ const RatesCard = memo(function RatesCard({ rates }: { rates: CurrentBalances['r
   return (
     <div className="rounded-xl border border-slate-700 bg-slate-800/80 p-5 shadow-lg shadow-black/40">
       <div className="text-xs uppercase tracking-wider text-slate-500">Курсы</div>
-      <div className="mt-1 max-w-[14rem] space-y-1 text-sm">
+      <div className="mt-1 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
         <RateLine label="USD/RUB" feed={rates?.usdRub} />
         <RateLine label="EUR/USD" feed={rates?.eurUsd} />
         <RateLine label="USD/CNY" feed={rates?.cnyUsd} />
-        {rates ? (
-          <div className={`mt-1 flex justify-between text-xs ${rates.stale ? 'text-amber-400' : 'text-emerald-500'}`}>
-            <span>статус</span>
-            <span>{rates.stale ? 'часть курсов устарела' : 'актуально'}</span>
-          </div>
-        ) : null}
       </div>
+      {rates ? (
+        <div className={`mt-3 flex items-baseline gap-2 border-t border-slate-700/60 pt-2 text-xs ${rates.stale ? 'text-amber-400' : 'text-emerald-500'}`}>
+          <span className="text-slate-500">статус</span>
+          <span>{rates.stale ? 'часть курсов устарела' : 'актуально'}</span>
+        </div>
+      ) : null}
     </div>
   )
 })
