@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { initDb, resetDbForTests, setDbForTests, getDb } from '../src/db.js'
 import { createRoom } from '../src/services/rooms.js'
 import { HttpError } from '../src/lib/errors.js'
-import { dayKey } from '../src/lib/date.js'
+import { dayKey, monthEnd, monthStart } from '../src/lib/date.js'
 import { acknowledgeGoal, addUserEntry, closeGoal, createGoal, deleteUserEntry, listGoals, reorderGoals, setChecklist, updateUserEntry } from '../src/services/goals/service.js'
 import { sanitizeDiaryHtml } from '../src/services/goals/diaryHtml.js'
 import type { ChecklistItem, GoalEntry, GoalWithProgress } from '../src/services/goals/types.js'
@@ -913,7 +913,7 @@ describe('goal list filters', () => {
     closeGoal(finished.id, 'failed')
     const month = dayKey().slice(0, 7)
 
-    const result = listGoals({ metric: 'daily', startDate: `${month}-01`, endDate: `${month}-31`, includeFinishedDaily: true, finishedOnly: true })
+    const result = listGoals({ metric: 'daily', startDate: monthStart(month), endDate: monthEnd(month), includeFinishedDaily: true, finishedOnly: true })
     expect(result.map((g) => g.id)).toContain(finished.id)
     expect(result.every((g) => g.status !== 'active')).toBe(true)
     expect(entriesOf(result[0]).length).toBeGreaterThan(0)
