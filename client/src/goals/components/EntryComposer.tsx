@@ -5,6 +5,8 @@ import { DiaryEditor } from './DiaryEditor'
 import { PaperclipIcon } from './icons'
 
 const MAX_IMAGES = 10
+const IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp,image/gif'
+const IMAGE_TYPES = new Set(IMAGE_ACCEPT.split(','))
 
 interface ImageAttachment {
   path: string
@@ -41,9 +43,7 @@ export function EntryComposer({ busy, onAdd, onUpload }: EntryComposerProps) {
     }
   }
 
-  const detectFiles = async (e: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? [])
-    e.target.value = ''
+  const addFiles = async (files: File[]) => {
     if (files.length === 0) return
     setError(null)
     const slots = MAX_IMAGES - attachments.length
@@ -51,21 +51,38 @@ export function EntryComposer({ busy, onAdd, onUpload }: EntryComposerProps) {
       setError(`Не более ${MAX_IMAGES} изображений на запись`)
       return
     }
-    const next = [...attachments, ...files.slice(0, slots).map(() => ({ path: '', uploading: true }))]
-    setAttachments(next)
+    const base = attachments.length
+    const accepted = files.slice(0, slots)
+    setAttachments([...attachments, ...accepted.map(() => ({ path: '', uploading: true }))])
     setBusyImages(true)
     let failed = false
-    for (let i = 0; i < files.length && i < slots; i++) {
+    for (let i = 0; i < accepted.length; i++) {
       try {
-        const path = await onUpload(files[i]!)
-        setAttachments((prev) => prev.map((a, j) => (j === attachments.length + i ? { path, uploading: false } : a)))
+        const path = await onUpload(accepted[i]!)
+        setAttachments((prev) => prev.map((a, j) => (j === base + i ? { path, uploading: false } : a)))
       } catch {
         failed = true
-        setAttachments((prev) => prev.filter((_, j) => j !== attachments.length + i))
+        setAttachments((prev) => prev.filter((_, j) => j !== base + i))
       }
     }
     setBusyImages(false)
     if (failed) setError('Не удалось загрузить одно из изображений')
+  }
+
+  const detectFiles = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    await addFiles(files)
+  }
+
+  const pasteImages = (files: File[]) => {
+    if (busy || busyImages) return
+    const images = files.filter((file) => IMAGE_TYPES.has(file.type))
+    if (images.length === 0) {
+      setError('Поддерживаются только PNG, JPEG, WebP и GIF')
+      return
+    }
+    void addFiles(images)
   }
 
   const removeAttachment = (index: number) => {
@@ -81,6 +98,7 @@ export function EntryComposer({ busy, onAdd, onUpload }: EntryComposerProps) {
         key={resetKey}
         ariaLabel="Заметка в дневник"
         initialContent=""
+        onPasteImages={pasteImages}
         onChange={(value) => {
           setHtml(value)
           if (error) setError(null)
@@ -123,7 +141,7 @@ export function EntryComposer({ busy, onAdd, onUpload }: EntryComposerProps) {
           >
             Добавить
           </button>
-          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple className="hidden" onChange={(e) => void detectFiles(e)} aria-hidden="true" tabIndex={-1} />
+          <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} multiple className="hidden" onChange={(e) => void detectFiles(e)} aria-hidden="true" tabIndex={-1} />
           <button
             type="button"
             disabled={attachDisabled}

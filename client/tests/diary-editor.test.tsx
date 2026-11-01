@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { DiaryEditor } from '../src/goals/components/DiaryEditor'
@@ -130,6 +130,35 @@ describe('DiaryEditor toolbar', () => {
     await user.click(screen.getByRole('menuitem', { name: 'Маркер #f87171' }))
 
     expect(onChange).toHaveBeenLastCalledWith(expect.stringContaining('data-color="#f87171"'))
+  })
+
+  it('routes pasted image files to onPasteImages and blocks the inline paste', () => {
+    const onPasteImages = vi.fn()
+    render(<DiaryEditor ariaLabel="Заметка в дневник" initialContent="" onChange={() => undefined} onPasteImages={onPasteImages} />)
+
+    const editor = screen.getByLabelText('Заметка в дневник')
+    const file = new File(['png'], 'shot.png', { type: 'image/png' })
+    const notPrevented = fireEvent.paste(editor, {
+      clipboardData: {
+        files: [file],
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }],
+        getData: () => ''
+      }
+    })
+
+    expect(onPasteImages).toHaveBeenCalledWith([file])
+    expect(notPrevented).toBe(false)
+    expect(editor.innerHTML).not.toContain('<img')
+  })
+
+  it('leaves a plain text paste to the editor', () => {
+    const onPasteImages = vi.fn()
+    render(<DiaryEditor ariaLabel="Заметка в дневник" initialContent="" onChange={() => undefined} onPasteImages={onPasteImages} />)
+
+    const editor = screen.getByLabelText('Заметка в дневник')
+    fireEvent.paste(editor, { clipboardData: { files: [], items: [], getData: () => 'просто текст' } })
+
+    expect(onPasteImages).not.toHaveBeenCalled()
   })
 })
 

@@ -51,11 +51,25 @@ function toEditorContent(content: string): string {
   return `<p>${paragraphs.join('</p><p>')}</p>`
 }
 
+function clipboardFiles(event: ClipboardEvent): File[] {
+  const data = event.clipboardData
+  if (!data) return []
+  const fromItems: File[] = []
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== 'file') continue
+    const file = item.getAsFile()
+    if (file) fromItems.push(file)
+  }
+  if (fromItems.length > 0) return fromItems
+  return Array.from(data.files ?? [])
+}
+
 interface DiaryEditorProps {
   initialContent: string
   onChange: (html: string) => void
   ariaLabel: string
   autofocus?: boolean
+  onPasteImages?: (files: File[]) => void
 }
 
 function ToolbarButton({
@@ -91,7 +105,13 @@ function Divider() {
 
 const EMPTY_TOOLBAR = { bold: false, italic: false, underline: false, highlight: false, highlightColor: null, fontSize: null }
 
-export function DiaryEditor({ initialContent, onChange, ariaLabel, autofocus = false }: DiaryEditorProps) {
+export function DiaryEditor({ initialContent, onChange, ariaLabel, autofocus = false, onPasteImages }: DiaryEditorProps) {
+  const pasteImages = useRef(onPasteImages)
+
+  useEffect(() => {
+    pasteImages.current = onPasteImages
+  }, [onPasteImages])
+
   const editor = useEditor({
     extensions: EXTENSIONS,
     content: toEditorContent(initialContent),
@@ -101,6 +121,13 @@ export function DiaryEditor({ initialContent, onChange, ariaLabel, autofocus = f
         role: 'textbox',
         'aria-label': ariaLabel,
         class: 'min-h-[44px] w-full px-3 pb-2 pt-0.5 text-base leading-relaxed text-slate-100 outline-none focus:outline-none'
+      },
+      handlePaste: (_view, event) => {
+        const files = clipboardFiles(event)
+        if (files.length === 0) return false
+        event.preventDefault()
+        pasteImages.current?.(files)
+        return true
       }
     },
     onUpdate: ({ editor }) => onChange(editor.getHTML())

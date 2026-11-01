@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { GoalCard } from '../src/goals/components/GoalCard'
@@ -456,6 +456,83 @@ describe('GoalCard', () => {
 
     await user.keyboard('{Escape}')
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Просмотр изображения' })).toBeNull())
+  })
+
+  it('steps through the attached images inside the lightbox', async () => {
+    const user = userEvent.setup()
+    const entry = {
+      id: 12,
+      goalId: 1,
+      kind: 'user' as const,
+      content: 'три скрина',
+      images: ['diary/a.png', 'diary/b.png', 'diary/c.png'],
+      milestone: null,
+      createdAt: '2026-09-17 12:00:00'
+    }
+    render(<Harness goal={makeGoal({ entries: [entry] })} />)
+    await user.click(screen.getByRole('button', { expanded: false }))
+    await user.click(screen.getAllByRole('button', { name: 'Открыть изображение' })[0]!)
+
+    const image = () => screen.getByAltText('Изображение') as HTMLImageElement
+    const prev = () => screen.getByRole('button', { name: 'Предыдущее изображение' }) as HTMLButtonElement
+    const next = () => screen.getByRole('button', { name: 'Следующее изображение' }) as HTMLButtonElement
+
+    expect(image().getAttribute('src')).toBe('/uploads/diary/a.png')
+    expect(prev().disabled).toBe(true)
+    expect(screen.getByText('1 / 3')).toBeTruthy()
+
+    await user.click(next())
+    expect(image().getAttribute('src')).toBe('/uploads/diary/b.png')
+    expect(screen.getByText('2 / 3')).toBeTruthy()
+
+    await user.click(next())
+    expect(image().getAttribute('src')).toBe('/uploads/diary/c.png')
+    expect(next().disabled).toBe(true)
+
+    await user.click(prev())
+    expect(image().getAttribute('src')).toBe('/uploads/diary/b.png')
+  })
+
+  it('locks the page scroll while the lightbox is open', async () => {
+    const user = userEvent.setup()
+    const entry = {
+      id: 12,
+      goalId: 1,
+      kind: 'user' as const,
+      content: 'со скрином',
+      images: ['diary/abc.png'],
+      milestone: null,
+      createdAt: '2026-09-17 12:00:00'
+    }
+    render(<Harness goal={makeGoal({ entries: [entry] })} />)
+    await user.click(screen.getByRole('button', { expanded: false }))
+
+    await user.click(screen.getByRole('button', { name: 'Открыть изображение' }))
+    expect(document.body.style.overflow).toBe('hidden')
+
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(document.body.style.overflow).toBe(''))
+  })
+
+  it('uploads an image pasted into the composer', async () => {
+    const user = userEvent.setup()
+    const onUploadImage = vi.fn().mockResolvedValue('diary/pasted.png')
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} />)
+    await user.click(screen.getByRole('button', { expanded: false }))
+    await user.click(screen.getByRole('button', { name: 'Редактировать цель' }))
+
+    const editor = screen.getByLabelText('Заметка в дневник')
+    const file = new File(['png'], 'shot.png', { type: 'image/png' })
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [file],
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }],
+        getData: () => ''
+      }
+    })
+
+    await waitFor(() => expect(onUploadImage).toHaveBeenCalledWith(file))
+    expect(await screen.findByAltText('Вложение')).toBeTruthy()
   })
 
   it('offers a partial status through the popover menu', async () => {

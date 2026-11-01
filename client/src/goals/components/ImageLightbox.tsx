@@ -1,21 +1,69 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
 
 interface ImageLightboxProps {
-  src: string
+  images: string[]
+  startIndex?: number
   alt?: string
   onClose: () => void
 }
 
-export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
+function ChevronIcon({ dir }: { dir: 'left' | 'right' }) {
+  return (
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={dir === 'left' ? 'm15 18-6-6 6-6' : 'm9 18 6-6-6-6'} />
+    </svg>
+  )
+}
+
+export function ImageLightbox({ images, startIndex = 0, alt, onClose }: ImageLightboxProps) {
+  const count = images.length
+  const [index, setIndex] = useState(() => Math.min(Math.max(startIndex, 0), Math.max(count - 1, 0)))
+
+  useEffect(() => {
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = previous
+    }
+  }, [])
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (count < 2) return
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        setIndex((i) => Math.max(i - 1, 0))
+      }
+      if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        setIndex((i) => Math.min(i + 1, count - 1))
+      }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, count])
+
+  if (count === 0) return null
+
+  const src = images[Math.min(index, count - 1)] ?? ''
+  const atStart = index === 0
+  const atEnd = index === count - 1
 
   return createPortal(
     <div
@@ -32,6 +80,7 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
         aria-hidden="true"
       />
       <motion.img
+        key={src}
         src={src}
         alt={alt ?? 'Изображение'}
         initial={{ opacity: 0, scale: 0.94 }}
@@ -50,6 +99,36 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
           <path d="M18 6 6 18M6 6l12 12" />
         </svg>
       </button>
+      {count > 1 && (
+        <>
+          <button
+            type="button"
+            aria-label="Предыдущее изображение"
+            title="Предыдущее изображение"
+            onClick={() => setIndex((i) => Math.max(i - 1, 0))}
+            disabled={atStart}
+            className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-slate-200 backdrop-blur transition hover:bg-black/70 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 sm:left-4"
+          >
+            <ChevronIcon dir="left" />
+          </button>
+          <button
+            type="button"
+            aria-label="Следующее изображение"
+            title="Следующее изображение"
+            onClick={() => setIndex((i) => Math.min(i + 1, count - 1))}
+            disabled={atEnd}
+            className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-slate-200 backdrop-blur transition hover:bg-black/70 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 sm:right-4"
+          >
+            <ChevronIcon dir="right" />
+          </button>
+          <div
+            aria-live="polite"
+            className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-xs tabular-nums text-slate-200"
+          >
+            {index + 1} / {count}
+          </div>
+        </>
+      )}
     </div>,
     document.body
   )

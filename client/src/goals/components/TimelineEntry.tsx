@@ -33,7 +33,7 @@ export function TimelineEntry({ entry, index, readonly, busy, onEdit, onDelete }
   const [images, setImages] = useState(entry.images)
   const [saveBusy, setSaveBusy] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [lightbox, setLightbox] = useState<string | null>(null)
+  const [lightbox, setLightbox] = useState<number | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   const textLen = diaryTextLength(textHtml)
@@ -139,11 +139,11 @@ export function TimelineEntry({ entry, index, readonly, busy, onEdit, onDelete }
             </div>
             {entry.images.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
-                {entry.images.map((path) => (
+                {entry.images.map((path, i) => (
                   <button
                     type="button"
                     key={path}
-                    onClick={() => setLightbox(path)}
+                    onClick={() => setLightbox(i)}
                     aria-label="Открыть изображение"
                     className="block h-16 w-16 overflow-hidden rounded-lg border border-slate-700/60 transition hover:border-indigo-400/60"
                   >
@@ -163,7 +163,13 @@ export function TimelineEntry({ entry, index, readonly, busy, onEdit, onDelete }
           </>
         )}
       </div>
-      {lightbox && <ImageLightbox src={`/uploads/${lightbox}`} onClose={() => setLightbox(null)} />}
+      {lightbox !== null && (
+        <ImageLightbox
+          images={entry.images.map((path) => `/uploads/${path}`)}
+          startIndex={lightbox}
+          onClose={() => setLightbox(null)}
+        />
+      )}
       {confirmDelete && (
         <ConfirmDialog
           title="Удалить запись?"
