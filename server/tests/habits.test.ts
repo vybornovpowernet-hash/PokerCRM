@@ -284,7 +284,7 @@ describe('habits service', () => {
     expect(listHabits(monthKey(now())).map((h) => h.id).sort()).toEqual([kept.id, gone.id].sort())
   })
 
-  it('accepts the partial status and counts it as success in the completion rate', () => {
+  it('accepts the partial status and weighs it as half a point in the completion rate', () => {
     const habit = createHabit('Спорт')
     expect(setHabitLog(habit.id, '2020-01-01', 'partial')).toEqual({ date: '2020-01-01', status: 'partial' })
     setHabitLog(habit.id, '2020-01-02', 'done')
@@ -295,7 +295,7 @@ describe('habits service', () => {
 
     const [item] = listHabitHistory()
     expect(item.logs).toEqual({ '2020-01-01': 'partial', '2020-01-02': 'done', '2020-01-03': 'missed', '2020-01-04': 'partial' })
-    // done + partial are successes: 3 of 4 → 75%; only the strict `done` keeps the streak
-    expect(item.stats).toMatchObject({ done: 1, partial: 2, missed: 1, tracked: 4, completionRate: 75, longestDoneStreak: 1 })
+    // done + partial at half weight: 1 + 2*0.5 of 4 → 50%; only the strict `done` keeps the streak
+    expect(item.stats).toMatchObject({ done: 1, partial: 2, missed: 1, tracked: 4, completionRate: 50, longestDoneStreak: 1 })
   })
 })

@@ -66,11 +66,16 @@ export function monthDays(month: string): MonthDay[] {
   return out
 }
 
-/** A partially kept day is a success for progress, a miss is not. Empty days are ignored. */
+/** Weighted success points: a `done` day is a full point, a `partial` day half. Halves stay exact in binary. */
+export function monthPoints(counts: { done: number; partial: number }): number {
+  return counts.done + counts.partial * 0.5
+}
+
+/** A partially kept day is worth half a point, a miss is worth none. Empty days are ignored. */
 export function progressPercent(counts: { done: number; partial: number; missed: number }): number | null {
   const tracked = counts.done + counts.partial + counts.missed
   if (tracked === 0) return null
-  return Math.round(((counts.done + counts.partial) / tracked) * 100)
+  return Math.round((monthPoints(counts) / tracked) * 100)
 }
 
 export function habitMonthProgress(habit: HabitWithLogs, days: MonthDay[]): number | null {
@@ -88,23 +93,27 @@ export function habitMonthProgress(habit: HabitWithLogs, days: MonthDay[]): numb
 
 export interface MonthProgress {
   percent: number | null
-  success: number
+  points: number
   tracked: number
 }
 
 export function overallMonthProgress(habits: HabitWithLogs[], days: MonthDay[]): MonthProgress {
-  let success = 0
-  let tracked = 0
+  let done = 0
+  let partial = 0
+  let missed = 0
   for (const habit of habits) {
     for (const day of days) {
       const status: HabitStatus | undefined = habit.logs[day.date]
-      if (status === 'done' || status === 'partial') {
-        success += 1
-        tracked += 1
-      } else if (status === 'missed') {
-        tracked += 1
-      }
+      if (status === 'done') done += 1
+      else if (status === 'partial') partial += 1
+      else if (status === 'missed') missed += 1
     }
   }
-  return { percent: tracked === 0 ? null : Math.round((success / tracked) * 100), success, tracked }
+  const counts = { done, partial, missed }
+  return { percent: progressPercent(counts), points: monthPoints(counts), tracked: counts.done + counts.partial + counts.missed }
+}
+
+/** Halves are exact in binary, so `toFixed(1)` cannot drift; whole points drop the tail. */
+export function formatPoints(points: number): string {
+  return Number.isInteger(points) ? String(points) : points.toFixed(1)
 }

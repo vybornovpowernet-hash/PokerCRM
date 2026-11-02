@@ -160,7 +160,7 @@ export function listHabitHistory(): HabitHistoryItem[] {
   })
 }
 
-// A day counts as tracked once it carries any log. `partial` is a full success
+// A day counts as tracked once it carries any log. `partial` is half a point
 // for the completion rate (a half-kept habit still moves the needle), but only a
 // strict `done` extends the streak — a partial day is a real achievement, not a
 // flawless one.
@@ -194,7 +194,7 @@ function computeStats(logs: Record<string, HabitStatus>): HabitStats {
     partial,
     missed,
     tracked,
-    completionRate: tracked === 0 ? null : Math.round(((done + partial) / tracked) * 100),
+    completionRate: tracked === 0 ? null : Math.round(((done + partial * 0.5) / tracked) * 100),
     firstDate: dates[0] ?? null,
     lastDate: dates[dates.length - 1] ?? null,
     longestDoneStreak

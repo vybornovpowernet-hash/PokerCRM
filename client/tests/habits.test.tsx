@@ -277,9 +277,9 @@ describe('HabitsPage', () => {
 
     await screen.findByText('Медитация')
     expect(screen.getByRole('button', { name: cellName('Медитация', partialDate) }).textContent).toBe('%')
-    // done + partial count as success: 2 of 3 tracked → 67%, per habit and in the footer
-    expect(screen.getAllByText('67%')).toHaveLength(2)
-    expect(screen.getByText(/2 из 3/)).not.toBeNull()
+    // done + half of partial: 1.5 of 3 tracked → 50%, per habit and in the footer
+    expect(screen.getAllByText('50%')).toHaveLength(2)
+    expect(screen.getByText(/1\.5 из 3/)).not.toBeNull()
 
     await user.click(screen.getByRole('button', { name: cellName('Медитация', missed) }))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: /Частично/ }))
@@ -317,7 +317,7 @@ describe('HabitsPage', () => {
         partial: 1,
         missed: 1,
         tracked: 3,
-        completionRate: 67,
+        completionRate: 50,
         firstDate: '2026-01-01',
         lastDate: '2026-01-03',
         longestDoneStreak: 1
@@ -334,7 +334,7 @@ describe('HabitsPage', () => {
     await user.click(screen.getByRole('tab', { name: 'История' }))
 
     expect(await screen.findByText('Бег')).not.toBeNull()
-    expect(screen.getByText('67%')).not.toBeNull()
+    expect(screen.getByText('50%')).not.toBeNull()
     expect(screen.getByText('Частично')).not.toBeNull()
     expect(screen.getByText('1 день')).not.toBeNull()
 

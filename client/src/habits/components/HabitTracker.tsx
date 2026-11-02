@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { Reorder, useDragControls } from 'motion/react'
 import type { HabitStatus, HabitWithLogs } from '../habits.types'
-import { dayKey, dayLabel, habitMonthProgress, monthDays, overallMonthProgress, pluralRu, type MonthDay } from '../metrics'
+import { dayKey, dayLabel, formatPoints, habitMonthProgress, monthDays, overallMonthProgress, pluralRu, type MonthDay } from '../metrics'
 import { HabitPopover } from './HabitPopover'
 import { CloseIcon, GripIcon, PencilIcon } from './icons'
 
@@ -115,7 +115,7 @@ export function HabitTracker({ habits, month, isCurrentMonth, sortable, onSetLog
           <span className="font-semibold">{overall.percent === null ? '—' : `${overall.percent}%`}</span>
           <span className="text-slate-500">
             {' '}
-            · {overall.success} из {overall.tracked} {pluralRu(overall.tracked, 'отметки', 'отметок', 'отметок')}
+            · {formatPoints(overall.points)} из {overall.tracked} {pluralRu(overall.tracked, 'отметки', 'отметок', 'отметок')}
           </span>
         </span>
       </div>
