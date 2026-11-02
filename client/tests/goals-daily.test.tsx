@@ -23,6 +23,7 @@ function goal(over: Partial<GoalWithProgress> = {}): GoalWithProgress {
     checklist: [],
     status: 'active',
     createdAt: '2026-10-11 00:00:00',
+    startDay: '2026-10-11',
     achievedAt: null,
     failedAt: null,
     closedAt: null,

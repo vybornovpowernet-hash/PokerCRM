@@ -5,7 +5,7 @@ import { initDb, resetDbForTests, setDbForTests, getDb } from '../src/db.js'
 import { createRoom } from '../src/services/rooms.js'
 import { HttpError } from '../src/lib/errors.js'
 import { dayKey, monthEnd, monthStart } from '../src/lib/date.js'
-import { acknowledgeGoal, addUserEntry, closeGoal, createGoal, deleteUserEntry, listGoals, reorderGoals, setChecklist, updateUserEntry } from '../src/services/goals/service.js'
+import { acknowledgeGoal, addUserEntry, closeGoal, createGoal, deleteUserEntry, listGoals, reorderGoals, repairGoalWindows, setChecklist, updateUserEntry } from '../src/services/goals/service.js'
 import { sanitizeDiaryHtml } from '../src/services/goals/diaryHtml.js'
 import type { ChecklistItem, GoalEntry, GoalWithProgress } from '../src/services/goals/types.js'
 import { DIARY_DIR, saveDiaryImage } from '../src/services/uploads.js'
@@ -28,6 +28,13 @@ function insertTournament(roomId: number, date: string, buyin: number, result: n
   getDb().prepare('INSERT INTO tournaments (room_id, date, buyin, result, currency) VALUES (?, ?, ?, ?, ?)').run(roomId, date, buyin, result, currency)
 }
 
+// Distance progress only counts activity from the goal's own start day. Fixtures
+// play in 2026-09, so the goal must have started before that: `created_at` is a
+// UTC stamp, 12:00 keeps the local day the same on either side of Greenwich.
+function backdateGoal(id: number, day = '2026-01-01'): void {
+  getDb().prepare('UPDATE goals SET created_at = ? WHERE id = ?').run(`${day} 12:00:00`, id)
+}
+
 function entriesOf(g: GoalWithProgress): GoalEntry[] {
   return g.entries
 }
@@ -46,6 +53,7 @@ describe('goals service', () => {
   it('computes distance progress from the tournament count', () => {
     const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'CNY' }).id
     const created = createGoal({ metric: 'distance', targetUnits: 100 })
+    backdateGoal(created.id)
     expect(created.progress).toMatchObject({ currentUnits: 0, percent: 0, blank: false })
 
     for (let i = 0; i < 30; i++) insertTournament(room, `2026-09-${String((i % 28) + 1).padStart(2, '0')}`, 550, 0, 'USD')
@@ -57,7 +65,8 @@ describe('goals service', () => {
 
   it('excludes Mystery Battle Royale rows from the distance metric', () => {
     const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'CNY' }).id
-    createGoal({ metric: 'distance', targetUnits: 100 })
+    const created = createGoal({ metric: 'distance', targetUnits: 100 })
+    backdateGoal(created.id)
     insertTournament(room, '2026-09-16', 550, 0, 'USD')
     getDb()
       .prepare("INSERT INTO tournaments (room_id, date, buyin, result, currency, name, is_mbr) VALUES (?, ?, ?, ?, ?, ?, 1)")
@@ -70,6 +79,7 @@ describe('goals service', () => {
   it('emits 50/75 milestone entries exactly once as progress climbs', () => {
     const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'CNY' }).id
     const created = createGoal({ metric: 'distance', targetUnits: 100 })
+    backdateGoal(created.id)
     for (let i = 0; i < 80; i++) insertTournament(room, `2026-09-${String((i % 28) + 1).padStart(2, '0')}`, 550, 0, 'USD')
 
     const [goal] = listGoals()
@@ -86,7 +96,8 @@ describe('goals service', () => {
 
   it('auto-achieves when the target is reached and records the 100 milestone', () => {
     const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'CNY' }).id
-    createGoal({ metric: 'distance', targetUnits: 10 })
+    const created = createGoal({ metric: 'distance', targetUnits: 10 })
+    backdateGoal(created.id)
     for (let i = 0; i < 10; i++) insertTournament(room, `2026-09-${String((i % 28) + 1).padStart(2, '0')}`, 550, 0, 'USD')
 
     const [goal] = listGoals()
@@ -231,6 +242,7 @@ describe('goals service', () => {
     const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
     for (let i = 0; i < 3; i++) insertTournament(room, `2026-09-${String((i % 28) + 1).padStart(2, '0')}`, 550, 0, 'USD')
     const goal = createGoal({ metric: 'distance', targetUnits: 10 })
+    backdateGoal(goal.id)
 
     const closed = closeGoal(goal.id, 'failed')
     expect(closed.finalPercent).toBe(30)
@@ -245,7 +257,8 @@ describe('goals service', () => {
 
   it('keeps an auto-finished goal unacknowledged until acknowledged', () => {
     const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
-    createGoal({ metric: 'distance', targetUnits: 1 })
+    const created = createGoal({ metric: 'distance', targetUnits: 1 })
+    backdateGoal(created.id)
     insertTournament(room, '2026-09-10', 550, 0, 'USD')
 
     const [auto] = listGoals()
@@ -406,6 +419,7 @@ describe('goal checklists', () => {
   it('keeps the frozen snapshot for a settled metric goal', () => {
     const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
     const goal = createGoal({ metric: 'distance', targetUnits: 10 })
+    backdateGoal(goal.id)
     for (let i = 0; i < 5; i++) insertTournament(room, `2026-09-${String(i + 1).padStart(2, '0')}`, 550, 0, 'USD')
     closeGoal(goal.id, 'failed')
 
@@ -478,6 +492,7 @@ describe('goal checklists', () => {
   it('keeps metric progress anchored and gates achievement on the checklist (AND)', () => {
     const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
     const goal = createGoal({ metric: 'distance', targetUnits: 10 })
+    backdateGoal(goal.id)
     setChecklist(goal.id, items('гигиена', 'разбор'))
 
     for (let i = 0; i < 10; i++) insertTournament(room, `2026-09-${String((i % 28) + 1).padStart(2, '0')}`, 550, 0, 'USD')
@@ -943,5 +958,172 @@ describe('goal list filters', () => {
     expect(() => listGoals({ startDate: 'not-a-date' })).toThrow(HttpError)
     expect(() => listGoals({ endDate: '2026-02-30' })).toThrow(HttpError)
     expect(() => listGoals({ startDate: '2026-10-31', endDate: '2026-10-01' })).toThrow(HttpError)
+  })
+})
+
+describe('goal window (activity since creation)', () => {
+  it('ignores tournaments played before the goal was created', () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    for (let i = 1; i <= 5; i++) insertTournament(room, `2020-01-0${i}`, 550, 0, 'USD')
+
+    const created = createGoal({ metric: 'distance', targetUnits: 4 })
+    expect(created.startDay).toBe(dayKey())
+    expect(created.progress).toMatchObject({ currentUnits: 0, percent: 0, blank: false })
+
+    insertTournament(room, dayKey(), 550, 0, 'USD')
+    const [listed] = listGoals()
+    expect(listed.progress).toMatchObject({ currentUnits: 1, percent: 25 })
+  })
+
+  it('counts the creation day itself — the day is the atomic unit here', () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    createGoal({ metric: 'distance', targetUnits: 2 })
+    insertTournament(room, dayKey(), 550, 0, 'USD')
+
+    const [listed] = listGoals()
+    expect(listed.progress).toMatchObject({ currentUnits: 1, percent: 50 })
+  })
+
+  it('keeps the MBR exclusion inside the window', () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    createGoal({ metric: 'distance', targetUnits: 10 })
+    insertTournament(room, dayKey(), 550, 0, 'USD')
+    getDb()
+      .prepare('INSERT INTO tournaments (room_id, date, buyin, result, currency, name, is_mbr) VALUES (?, ?, ?, ?, ?, ?, 1)')
+      .run(room, dayKey(), 100, 0, 'USD', "Mystery Battle Royale $1, Hold'em No Limit")
+
+    const [listed] = listGoals()
+    expect(listed.progress).toMatchObject({ currentUnits: 1, percent: 10 })
+  })
+
+  it('does not window the bankroll: it is a level, and old balances still define it', () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    insertBalance(room, '2020-01-01', 500_00, 'USD')
+
+    const created = createGoal({ metric: 'bankroll', targetUnits: 1000_00 })
+    expect(created.progress).toMatchObject({ currentUnits: 500_00, percent: 50 })
+  })
+
+  it('reconciles goals created on different days against their own windows', () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    const old = createGoal({ metric: 'distance', targetUnits: 10 })
+    backdateGoal(old.id, '2020-01-01')
+    const fresh = createGoal({ metric: 'distance', targetUnits: 10 })
+    for (let i = 1; i <= 3; i++) insertTournament(room, `2020-06-0${i}`, 550, 0, 'USD')
+
+    const byId = new Map(listGoals().map((g) => [g.id, g]))
+    expect(byId.get(old.id)?.progress).toMatchObject({ currentUnits: 3, percent: 30 })
+    expect(byId.get(fresh.id)?.progress).toMatchObject({ currentUnits: 0, percent: 0 })
+  })
+})
+
+describe('bankroll goal creation guard', () => {
+  it('refuses a target the current bankroll already reaches', () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    insertBalance(room, dayKey(), 500_00, 'USD')
+
+    expect(() => createGoal({ metric: 'bankroll', targetUnits: 400_00 })).toThrow(HttpError)
+    expect(() => createGoal({ metric: 'bankroll', targetUnits: 500_00 })).toThrow(HttpError)
+    expect(createGoal({ metric: 'bankroll', targetUnits: 500_01 }).status).toBe('active')
+  })
+
+  it('lets a bankroll goal through while the level is unknown', () => {
+    const room = createRoom({ name: 'RedStar', cashCurrency: 'RUB', tournamentCurrency: 'RUB' }).id
+    insertBalance(room, dayKey(), 10_000_00, 'RUB')
+
+    const created = createGoal({ metric: 'bankroll', targetUnits: 1000_00 })
+    expect(created.progress).toMatchObject({ currentUnits: null, percent: 0, blank: true })
+  })
+
+  it('does not guard distance goals — any target starts from zero', () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    insertBalance(room, dayKey(), 500_00, 'USD')
+    expect(createGoal({ metric: 'distance', targetUnits: 1 }).status).toBe('active')
+  })
+})
+
+describe('goal window boot repair', () => {
+  function goalRow(id: number): Record<string, unknown> {
+    return getDb().prepare('SELECT status, achieved_at, final_percent, final_units, acknowledged_at FROM goals WHERE id = ?').get(id) as Record<string, unknown>
+  }
+
+  function milestoneRows(id: number): Array<{ milestone: number }> {
+    return getDb()
+      .prepare("SELECT milestone FROM goal_entries WHERE goal_id = ? AND kind = 'system' AND milestone IS NOT NULL ORDER BY milestone")
+      .all(id) as unknown as Array<{ milestone: number }>
+  }
+
+  // Reproduces the pre-fix database: the old code auto-settled on the whole
+  // history, so the row, the snapshot and the milestone notes all exist already.
+  function forgeLegacySettlement(id: number, units: number): void {
+    getDb().prepare("DELETE FROM goal_entries WHERE goal_id = ? AND kind = 'system' AND milestone IS NOT NULL").run(id)
+    getDb()
+      .prepare("UPDATE goals SET status = 'achieved', achieved_at = datetime('now'), final_percent = 100, final_units = ? WHERE id = ?")
+      .run(units, id)
+    getDb().prepare("INSERT INTO goal_entries (goal_id, kind, content, milestone) VALUES (?, 'system', ?, 50)").run(id, `Пройдено 50% — сыграно ${Math.round(units / 2)} турниров`)
+    getDb().prepare("INSERT INTO goal_entries (goal_id, kind, content, milestone) VALUES (?, 'system', ?, 100)").run(id, `Цель достигнута — сыграно ${units} турниров`)
+  }
+
+  it('reopens a distance goal that was achieved on pre-creation history', () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    for (let i = 1; i <= 5; i++) insertTournament(room, `2020-01-0${i}`, 550, 0, 'USD')
+    const goal = createGoal({ metric: 'distance', targetUnits: 4 })
+    forgeLegacySettlement(goal.id, 5)
+    addUserEntry(goal.id, 'моя заметка остаётся')
+
+    expect(repairGoalWindows()).toEqual({ reverted: 1, skipped: false })
+
+    expect(goalRow(goal.id)).toMatchObject({ status: 'active', achieved_at: null, final_percent: null, final_units: null, acknowledged_at: null })
+    expect(milestoneRows(goal.id)).toEqual([])
+    const [listed] = listGoals()
+    expect(listed.progress).toMatchObject({ currentUnits: 0, percent: 0 })
+    expect(listed.entries.some((e) => e.kind === 'user' && e.content === 'моя заметка остаётся')).toBe(true)
+  })
+
+  it('reopens an acknowledged bogus goal too', () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    insertTournament(room, '2020-01-01', 550, 0, 'USD')
+    const goal = createGoal({ metric: 'distance', targetUnits: 1 })
+    forgeLegacySettlement(goal.id, 1)
+    getDb().prepare("UPDATE goals SET acknowledged_at = datetime('now') WHERE id = ?").run(goal.id)
+
+    expect(repairGoalWindows()).toMatchObject({ reverted: 1 })
+    expect(goalRow(goal.id)).toMatchObject({ status: 'active', acknowledged_at: null })
+  })
+
+  it('keeps a goal that is honestly achieved under the new rule', () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    const goal = createGoal({ metric: 'distance', targetUnits: 4 })
+    for (let i = 0; i < 4; i++) insertTournament(room, dayKey(), 550, 0, 'USD')
+    expect(listGoals()[0].status).toBe('achieved')
+
+    expect(repairGoalWindows()).toMatchObject({ reverted: 0 })
+    expect(goalRow(goal.id)).toMatchObject({ status: 'achieved' })
+    expect(milestoneRows(goal.id).map((r) => r.milestone)).toEqual([100])
+  })
+
+  it('leaves binary and bankroll goals alone', () => {
+    const custom = createGoal({ metric: 'custom', targetUnits: 1, title: 'Ремонт', checklist: ['готово'] })
+    const done = setChecklist(custom.id, [{ id: custom.checklist[0]!.id, text: 'готово', status: 'completed' }])
+    expect(done.status).toBe('achieved')
+
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    insertBalance(room, dayKey(), 900_00, 'USD')
+    const bankroll = createGoal({ metric: 'bankroll', targetUnits: 1000_00 })
+    getDb().prepare('UPDATE balance_entries SET amount = ? WHERE room_id = ?').run(1200_00, room)
+    expect(listGoals().find((g) => g.id === bankroll.id)?.status).toBe('achieved')
+
+    expect(repairGoalWindows()).toMatchObject({ reverted: 0 })
+    expect(goalRow(custom.id)).toMatchObject({ status: 'achieved' })
+    expect(goalRow(bankroll.id)).toMatchObject({ status: 'achieved' })
+  })
+
+  it('runs once — after the flag a manual «Выполнена» is never undone', () => {
+    const goal = createGoal({ metric: 'distance', targetUnits: 100 })
+    expect(repairGoalWindows()).toMatchObject({ skipped: false })
+
+    closeGoal(goal.id, 'achieved')
+    expect(repairGoalWindows()).toEqual({ reverted: 0, skipped: true })
+    expect(goalRow(goal.id)).toMatchObject({ status: 'achieved' })
   })
 })

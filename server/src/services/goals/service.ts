@@ -1,13 +1,15 @@
 import { HttpError } from '../../lib/errors.js'
 import { dayKey, isValidDayKey } from '../../lib/date.js'
+import { formatMinUnits } from '../../lib/money.js'
 import { withTransaction } from '../../db.js'
 import { deleteDiaryImage, isDiaryImagePath } from '../uploads.js'
+import { hasGoalWindowRepairDone, markGoalWindowRepairDone } from '../settings.js'
 import { diaryTextLength, sanitizeDiaryHtml } from './diaryHtml.js'
 import { normalizeChecklistStatus } from './checklist.js'
-import { collectGoalsFacts, acknowledgeGoalRow, deleteEntry, entryExists, getEntryRow, insertEntry, insertGoal, listGoalRows, requireGoal, setGoalSortOrder, settleGoal, updateChecklist, updateEntry } from './db.js'
+import { collectBankrollUsd, collectGoalsFacts, acknowledgeGoalRow, countTournamentsSince, deleteEntry, deleteSystemMilestoneEntries, entryExists, getEntryRow, insertEntry, insertGoal, listGoalRows, reopenGoal, requireGoal, setGoalSortOrder, settleGoal, updateChecklist, updateEntry } from './db.js'
 import { getResolver } from './metrics.js'
 import { computeProgress, lightReconcile, reconcileGoal } from './reconcile.js'
-import type { ChecklistItem, GoalCloseOutcome, GoalEntry, GoalMetric, GoalWithProgress } from './types.js'
+import type { ChecklistItem, Goal, GoalCloseOutcome, GoalEntry, GoalMetric, GoalWithProgress, GoalsFacts } from './types.js'
 
 const VALID_METRICS = new Set<GoalMetric>(['bankroll', 'distance', 'custom', 'daily'])
 
@@ -109,8 +111,17 @@ export function listGoals(
   const rows = listGoalRows(filter)
   const allFinished = rows.length === 0 || rows.every((goal) => goal.status !== 'active')
   if (allFinished) return rows.map((goal) => lightReconcile(goal))
-  const facts = collectGoalsFacts()
-  return rows.map((goal) => reconcileGoal(goal, facts))
+  // Facts are window-relative: two goals created on different days measure
+  // different amounts of history, so each distinct start day gets its own facts.
+  const byWindow = new Map<string, GoalsFacts>()
+  const factsFor = (goal: Goal): GoalsFacts => {
+    const cached = byWindow.get(goal.startDay)
+    if (cached) return cached
+    const facts = collectGoalsFacts(goal.startDay)
+    byWindow.set(goal.startDay, facts)
+    return facts
+  }
+  return rows.map((goal) => reconcileGoal(goal, factsFor(goal)))
 }
 
 function validateListOptions(input: {
@@ -185,8 +196,21 @@ export function createGoal(input: {
   const deadline = metric === 'daily' ? dayKey() : validateDeadline(input.deadline)
   const targetUnits = isBinaryMetric(metric) ? 1 : validateTargetUnits(input.targetUnits)
   const checklist = validateCreationChecklist(input.checklist)
+  if (metric === 'bankroll') assertBankrollTargetAboveCurrent(targetUnits)
   const goal = withTransaction(() => insertGoal({ metric, targetUnits, deadline, title: isBinaryMetric(metric) ? title : null, checklist }))
-  return reconcileGoal(goal, collectGoalsFacts())
+  return reconcileGoal(goal, collectGoalsFacts(goal.startDay))
+}
+
+// A bankroll goal measures a level, not a flow: the current bankroll already IS
+// the achieved value, so a target at or below it would be born at 100%. Refusing
+// it at creation beats letting the user watch a goal complete itself instantly.
+// An unconvertible (blank) bankroll cannot be compared — let such goals through,
+// the card shows the blank state honestly.
+function assertBankrollTargetAboveCurrent(targetUnits: number): void {
+  const current = collectBankrollUsd()
+  if (current !== null && targetUnits <= current) {
+    throw new HttpError(400, `targetUnits: текущий банкролл уже ${formatMinUnits(current, 'USD')} — цель должна быть выше`)
+  }
 }
 
 function validateCreationChecklist(value: unknown): ChecklistItem[] {
@@ -242,7 +266,7 @@ export function closeGoal(id: number, outcome: unknown): GoalWithProgress {
   const goal = requireGoal(id)
   if (goal.status !== 'active') throw new HttpError(400, 'Only active goals can be closed')
   const settled = validateOutcome(outcome)
-  const facts = collectGoalsFacts()
+  const facts = collectGoalsFacts(goal.startDay)
   const progress = computeProgress(goal, facts)
   const snapshot = { percent: progress.percent, units: progress.currentUnits }
   withTransaction(() => {
@@ -258,19 +282,50 @@ export function closeGoal(id: number, outcome: unknown): GoalWithProgress {
     }
     settleGoal(goal.id, settled, snapshot, true)
   })
-  return reconcileGoal(requireGoal(goal.id), collectGoalsFacts())
+  return reconcileGoal(requireGoal(goal.id), facts)
 }
 
 export function acknowledgeGoal(id: number): GoalWithProgress {
   const goal = requireGoal(id)
   if (goal.status === 'active') throw new HttpError(400, 'Only finished goals can be acknowledged')
   withTransaction(() => acknowledgeGoalRow(id))
-  return reconcileGoal(requireGoal(id), collectGoalsFacts())
+  return reconcileGoal(requireGoal(id), collectGoalsFacts(goal.startDay))
 }
 
 export function setChecklist(id: number, items: unknown): GoalWithProgress {
   const goal = requireGoal(id)
   const checklist = validateChecklist(items)
   const updated = withTransaction(() => updateChecklist(goal.id, checklist))
-  return reconcileGoal(updated, collectGoalsFacts())
+  return reconcileGoal(updated, collectGoalsFacts(goal.startDay))
+}
+
+/**
+ * One-shot data repair, run at startup before the first request.
+ *
+ * Before the window filter, `distance` progress counted EVERY tournament in the
+ * database, so a goal created after a big history was born achieved. The repair
+ * re-checks each achieved distance goal against its own start day and reopens
+ * the ones that only looked finished. `bankroll` is a level, not a flow — its
+ * math never changed, so its finished goals are left alone. Goals that still
+ * meet the target under the new rule keep their (now honest) achievement.
+ *
+ * One-shot because a terminal goal is otherwise immutable history: a permanent
+ * check would silently undo a deliberate manual «Выполнена» forever.
+ */
+export function repairGoalWindows(): { reverted: number; skipped: boolean } {
+  if (hasGoalWindowRepairDone()) return { reverted: 0, skipped: true }
+  let reverted = 0
+  for (const goal of listGoalRows({ metric: 'distance' })) {
+    if (goal.status !== 'achieved') continue
+    const played = countTournamentsSince(goal.startDay)
+    if (played >= goal.targetUnits) continue
+    withTransaction(() => {
+      reopenGoal(goal.id)
+      deleteSystemMilestoneEntries(goal.id)
+    })
+    console.info(`[goals] reopened distance goal #${goal.id}: played ${played} of ${goal.targetUnits} since ${goal.startDay}`)
+    reverted += 1
+  }
+  markGoalWindowRepairDone()
+  return { reverted, skipped: false }
 }

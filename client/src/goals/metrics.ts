@@ -116,14 +116,14 @@ export interface GoalTimeLabel {
   overdue: boolean
 }
 
-export function goalTimeLabel(goal: Pick<Goal, 'deadline' | 'createdAt'>, today: string = dayKey(new Date())): GoalTimeLabel {
+export function goalTimeLabel(goal: Pick<Goal, 'deadline' | 'startDay'>, today: string = dayKey(new Date())): GoalTimeLabel {
   if (goal.deadline) {
     const left = daysBetween(today, goal.deadline)
     if (left < 0) return { text: 'Дедлайн истек', overdue: true }
     if (left === 0) return { text: 'Дедлайн сегодня', overdue: false }
     return { text: left === 1 ? 'Остался 1 день' : `Осталось ${left} ${pluralDays(left)}`, overdue: false }
   }
-  const passed = daysBetween(goal.createdAt.slice(0, 10), today)
+  const passed = daysBetween(goal.startDay, today)
   if (passed <= 0) return { text: 'В процессе: сегодня', overdue: false }
   return { text: passed === 1 ? 'В процессе: 1 день' : `В процессе: ${passed} ${pluralDays(passed)}`, overdue: false }
 }

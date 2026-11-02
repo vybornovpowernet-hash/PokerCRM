@@ -2,6 +2,7 @@ import { getDb } from '../../db.js'
 import { convertToUsd } from '../rates/convert.js'
 import { mttOnly } from '../tournamentScope.js'
 import { HttpError } from '../../lib/errors.js'
+import { dayKeyFromUtcStamp } from '../../lib/date.js'
 import { normalizeChecklistStatus } from './checklist.js'
 import type { ChecklistItem, Goal, GoalEntry, GoalEntryKind, GoalMetric, GoalsFacts, GoalSnapshot, GoalStatus, GoalTerminalStatus } from './types.js'
 
@@ -49,6 +50,7 @@ function mapGoal(r: GoalRow): Goal {
     checklist: parseChecklist(r.checklist),
     status: normalizeStatus(r.status),
     createdAt: r.created_at,
+    startDay: dayKeyFromUtcStamp(r.created_at) ?? r.created_at.slice(0, 10),
     achievedAt: r.achieved_at,
     failedAt: r.failed_at,
     closedAt: r.closed_at,
@@ -98,7 +100,7 @@ function parseImages(raw: string): string[] {
   }
 }
 
-export function collectGoalsFacts(): GoalsFacts {
+export function collectBankrollUsd(): number | null {
   const balances = getDb()
     .prepare(
       `SELECT b.room_id, b.date, b.amount, b.currency
@@ -109,24 +111,27 @@ export function collectGoalsFacts(): GoalsFacts {
     .all() as unknown as { room_id: number; date: string; amount: number; currency: string }[]
 
   let currentBankrollUsd = 0
-  let blank = false
   for (const row of balances) {
     const usd = convertToUsd(row.amount, row.currency, row.date, row.room_id)
-    if (usd === null) {
-      blank = true
-      break
-    }
+    if (usd === null) return null
     currentBankrollUsd += usd
   }
+  return currentBankrollUsd
+}
 
-  // distance counts classic MTT tournaments only — MBR (hyper-turbo) is
-  // isolated from analytics while its money still flows through balances.
-  const tournamentCount = (getDb().prepare(`SELECT COUNT(*) AS c FROM tournaments WHERE 1 = 1${mttOnly('is_mbr')}`).get() as { c: number }).c
+// distance counts classic MTT tournaments only — MBR (hyper-turbo) is
+// isolated from analytics while its money still flows through balances.
+// `sinceDay` is the goal's own local start day: a goal measures what the user
+// plays AFTER creating it, never the whole history that already sat in the DB.
+export function countTournamentsSince(sinceDay: string): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS c FROM tournaments WHERE date >= ?${mttOnly('is_mbr')}`)
+    .get(sinceDay) as { c: number }
+  return row.c
+}
 
-  return {
-    currentBankrollUsd: blank ? null : currentBankrollUsd,
-    tournamentCount
-  }
+export function collectGoalsFacts(sinceDay: string): GoalsFacts {
+  return { currentBankrollUsd: collectBankrollUsd(), tournamentCount: countTournamentsSince(sinceDay) }
 }
 
 export interface GoalListFilter {
@@ -202,6 +207,28 @@ export function settleGoal(id: number, status: GoalTerminalStatus, snapshot: Goa
 export function acknowledgeGoalRow(id: number): void {
   const info = getDb().prepare("UPDATE goals SET acknowledged_at = datetime('now') WHERE id = ?").run(id)
   if (Number(info.changes) === 0) throw new HttpError(404, 'Goal not found')
+}
+
+/**
+ * Reopens a goal that was settled automatically on numbers it no longer meets:
+ * the status, the terminal timestamp and the frozen snapshot all go away, so the
+ * next read reconciles it live. Only the boot repair calls this — a terminal goal
+ * is otherwise immutable history.
+ */
+export function reopenGoal(id: number): void {
+  getDb()
+    .prepare("UPDATE goals SET status = 'active', achieved_at = NULL, failed_at = NULL, final_percent = NULL, final_units = NULL, acknowledged_at = NULL WHERE id = ?")
+    .run(id)
+}
+
+/**
+ * Drops the automatic milestone notes of a reopened goal. Their text quotes the
+ * bogus numbers ("Пройдено 50% — сыграно 300 турниров"), and UNIQUE(goal_id,
+ * milestone) plus `entryExists` would block re-emitting the honest ones. Hand-
+ * written diary notes survive: the user's own text is never repair collateral.
+ */
+export function deleteSystemMilestoneEntries(goalId: number): void {
+  getDb().prepare("DELETE FROM goal_entries WHERE goal_id = ? AND kind = 'system' AND milestone IS NOT NULL").run(goalId)
 }
 
 export function listEntries(goalId: number): GoalEntry[] {

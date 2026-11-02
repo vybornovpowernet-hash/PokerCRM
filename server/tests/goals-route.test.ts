@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { createApp } from '../src/app.js'
 import { initDb, resetDbForTests, setDbForTests, getDb } from '../src/db.js'
+import { dayKey } from '../src/lib/date.js'
 import { createRoom } from '../src/services/rooms.js'
 
 let app: FastifyInstance
@@ -48,8 +49,9 @@ describe('goals routes', () => {
 
   it('reports live progress in the list', async () => {
     const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
-    insertTournament(room, '2026-09-10', 550, 700, 'USD')
-    insertTournament(room, '2026-09-11', 550, 0, 'USD')
+    const today = dayKey()
+    insertTournament(room, today, 550, 700, 'USD')
+    insertTournament(room, today, 550, 0, 'USD')
     await post({ metric: 'distance', targetUnits: 4 })
 
     const res = await app.inject({ method: 'GET', url: '/api/goals' })
@@ -59,6 +61,37 @@ describe('goals routes', () => {
     const milestones = ((goals[0].entries as { milestone: number | null }[]).map((e) => e.milestone).sort())
     expect(milestones).toEqual([50])
     expect((goals[0].status as string)).toBe('active')
+    expect(goals[0].startDay).toBe(today)
+  })
+
+  it('counts only tournaments from the goal start day onward', async () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    insertTournament(room, '2020-01-05', 550, 0, 'USD')
+    insertTournament(room, '2020-01-06', 550, 0, 'USD')
+
+    const { body } = await post({ metric: 'distance', targetUnits: 4 })
+    const created = body.goal as { id: number; status: string; progress: { currentUnits: number; percent: number } }
+    expect(created.progress).toMatchObject({ currentUnits: 0, percent: 0 })
+    expect(created.status).toBe('active')
+
+    insertTournament(room, dayKey(), 550, 0, 'USD')
+    const res = await app.inject({ method: 'GET', url: '/api/goals' })
+    const goals = (JSON.parse(res.body) as { goals: Record<string, unknown>[] }).goals
+    expect(goals[0].progress).toMatchObject({ currentUnits: 1, percent: 25 })
+  })
+
+  it('refuses a bankroll goal at or below the current bankroll', async () => {
+    const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    getDb()
+      .prepare("INSERT INTO balance_entries (room_id, date, amount, currency, source) VALUES (?, ?, ?, ?, 'manual')")
+      .run(room, dayKey(), 500_00, 'USD')
+
+    expect((await post({ metric: 'bankroll', targetUnits: 500_00 })).statusCode).toBe(400)
+    expect((await post({ metric: 'bankroll', targetUnits: 400_00 })).statusCode).toBe(400)
+
+    const { statusCode, body } = await post({ metric: 'bankroll', targetUnits: 600_00 })
+    expect(statusCode).toBe(200)
+    expect((body.goal as { status: string }).status).toBe('active')
   })
 
   it('adds a user entry via POST /:id/entry', async () => {
@@ -160,7 +193,7 @@ describe('goals routes', () => {
 
   it('acknowledges an auto-finished goal via POST /:id/acknowledge', async () => {
     const room = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
-    insertTournament(room, '2026-09-10', 550, 0, 'USD')
+    insertTournament(room, dayKey(), 550, 0, 'USD')
     const { body } = await post({ metric: 'distance', targetUnits: 1 })
     const goal = body.goal as { id: number; status: string; acknowledgedAt: string | null }
     expect(goal).toMatchObject({ status: 'achieved', acknowledgedAt: null })

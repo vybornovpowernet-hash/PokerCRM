@@ -17,8 +17,8 @@ interface MetricOption {
 }
 
 const METRIC_OPTIONS: Record<GoalMetric, MetricOption> = {
-  bankroll: { label: 'Банкролл', hint: 'целевая сумма баланса в USD по текущим курсам', placeholder: '5000', field: 'target' },
-  distance: { label: 'Турниры', hint: 'целевое количество сыгранных турниров', placeholder: '100', field: 'target' },
+  bankroll: { label: 'Банкролл', hint: 'целевая сумма баланса в USD по текущим курсам — должна быть выше текущей', placeholder: '5000', field: 'target' },
+  distance: { label: 'Турниры', hint: 'целевое количество сыгранных турниров — считаем только с даты создания цели', placeholder: '100', field: 'target' },
   custom: { label: 'Своя', hint: 'никаких метрик — достижение отмечаете вручную', placeholder: 'например, выучить испанский', field: 'title' },
   daily: { label: 'Ежедневник', hint: 'дело на один день — выполнение отмечаете сами', placeholder: 'например, зарядка', field: 'title' }
 }

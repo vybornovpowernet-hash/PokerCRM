@@ -1,6 +1,7 @@
 import { createApp } from './app.js'
 import { closeDb, getDb } from './db.js'
 import { recomputeAllBalances } from './services/balances.js'
+import { repairGoalWindows } from './services/goals/service.js'
 import { autoRefresh } from './services/rates/refresh.js'
 import { closeBrowser } from './services/rates/pokerdon.js'
 
@@ -8,6 +9,15 @@ getDb() // ensure data dir + schema exist at startup
 // Rebuild the derived auto balance chain so the v18 fix takes effect immediately
 // (manual snapshots are restored by the migration, auto rows are re-derived here).
 recomputeAllBalances()
+// One-shot data repair for the goal-window fix: distance goals that were auto-
+// achieved on the whole pre-creation history get reopened. A failure here must
+// not brick boot — the settings flag stays unset, so the next start retries.
+try {
+  const repair = repairGoalWindows()
+  if (!repair.skipped && repair.reverted > 0) console.info(`[goals] window repair reopened ${repair.reverted} goal(s)`)
+} catch (err) {
+  console.error('[goals] window repair failed, will retry on next start', err)
+}
 
 const app = await createApp({ logger: true })
 

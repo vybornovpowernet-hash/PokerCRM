@@ -31,6 +31,7 @@ export interface Goal {
   checklist: ChecklistItem[]
   status: GoalStatus
   createdAt: string
+  startDay: string
   achievedAt: string | null
   failedAt: string | null
   closedAt: string | null

@@ -122,16 +122,16 @@ describe('goals time helpers', () => {
 
   it('builds a deadline label from today to the deadline', () => {
     const today = '2026-09-17'
-    expect(goalTimeLabel({ deadline: '2026-12-31', createdAt: '2026-09-01 00:00:00' }, today)).toEqual({ text: 'Осталось 105 дней', overdue: false })
-    expect(goalTimeLabel({ deadline: '2026-09-18', createdAt: '2026-09-01 00:00:00' }, today)).toEqual({ text: 'Остался 1 день', overdue: false })
-    expect(goalTimeLabel({ deadline: '2026-09-17', createdAt: '2026-09-01 00:00:00' }, today)).toEqual({ text: 'Дедлайн сегодня', overdue: false })
-    expect(goalTimeLabel({ deadline: '2026-09-16', createdAt: '2026-09-01 00:00:00' }, today)).toEqual({ text: 'Дедлайн истек', overdue: true })
+    expect(goalTimeLabel({ deadline: '2026-12-31', startDay: '2026-09-01' }, today)).toEqual({ text: 'Осталось 105 дней', overdue: false })
+    expect(goalTimeLabel({ deadline: '2026-09-18', startDay: '2026-09-01' }, today)).toEqual({ text: 'Остался 1 день', overdue: false })
+    expect(goalTimeLabel({ deadline: '2026-09-17', startDay: '2026-09-01' }, today)).toEqual({ text: 'Дедлайн сегодня', overdue: false })
+    expect(goalTimeLabel({ deadline: '2026-09-16', startDay: '2026-09-01' }, today)).toEqual({ text: 'Дедлайн истек', overdue: true })
   })
 
-  it('counts elapsed days from creation when no deadline', () => {
-    expect(goalTimeLabel({ deadline: null, createdAt: '2026-09-17 00:00:00' }, '2026-09-17')).toEqual({ text: 'В процессе: сегодня', overdue: false })
-    expect(goalTimeLabel({ deadline: null, createdAt: '2026-09-17 00:00:00' }, '2026-09-18')).toEqual({ text: 'В процессе: 1 день', overdue: false })
-    expect(goalTimeLabel({ deadline: null, createdAt: '2026-09-01 00:00:00' }, '2026-09-17')).toEqual({ text: 'В процессе: 16 дней', overdue: false })
-    expect(goalTimeLabel({ deadline: null, createdAt: '2026-07-01 00:00:00' }, '2026-09-17')).toEqual({ text: 'В процессе: 78 дней', overdue: false })
+  it('counts elapsed days from the local start day when no deadline', () => {
+    expect(goalTimeLabel({ deadline: null, startDay: '2026-09-17' }, '2026-09-17')).toEqual({ text: 'В процессе: сегодня', overdue: false })
+    expect(goalTimeLabel({ deadline: null, startDay: '2026-09-17' }, '2026-09-18')).toEqual({ text: 'В процессе: 1 день', overdue: false })
+    expect(goalTimeLabel({ deadline: null, startDay: '2026-09-01' }, '2026-09-17')).toEqual({ text: 'В процессе: 16 дней', overdue: false })
+    expect(goalTimeLabel({ deadline: null, startDay: '2026-07-01' }, '2026-09-17')).toEqual({ text: 'В процессе: 78 дней', overdue: false })
   })
 })

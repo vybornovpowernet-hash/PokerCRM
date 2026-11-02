@@ -13,6 +13,10 @@ export const DAY_START_HOUR_KEY = 'day_start_hour'
 export const DAY_START_HOUR_MIN = 0
 export const DAY_START_HOUR_MAX = 12
 
+// One-shot marker for the goal-window data repair (see `services/goals/service.ts`).
+// Key-value storage, so the repair needs no schema migration and never re-runs.
+const GOAL_WINDOW_REPAIR_KEY = 'goal_window_repair_done'
+
 function read(key: string): string | null {
   const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
   return row?.value ?? null
@@ -49,4 +53,26 @@ export function setDayStartHour(hour: unknown): number {
 /** All settings in the shape consumed by GET /api/settings. */
 export function getSettings(): { dayStartHour: number } {
   return { dayStartHour: getDayStartHour() }
+}
+
+/** Raw key read for internal markers (never exposed through the API). */
+export function hasSetting(key: string): boolean {
+  return read(key) !== null
+}
+
+export function getSetting(key: string): string | null {
+  return read(key)
+}
+
+export function setSetting(key: string, value: string): void {
+  write(key, value)
+}
+
+/** The goal-window data repair has already run on this database. */
+export function hasGoalWindowRepairDone(): boolean {
+  return hasSetting(GOAL_WINDOW_REPAIR_KEY)
+}
+
+export function markGoalWindowRepairDone(): void {
+  setSetting(GOAL_WINDOW_REPAIR_KEY, '1')
 }

@@ -20,10 +20,6 @@ function emitIfMissing(goal: Goal, milestone: number, content: string): void {
   }
 }
 
-/**
- * Live progress of a goal as of now. Exported so `closeGoal` can freeze the
- * exact snapshot that the history view shows.
- */
 function binaryProgress(goal: Goal): GoalProgress {
   if (goal.checklist.length === 0) {
     return { currentUnits: null, percent: goal.status === 'achieved' ? 100 : 0, blank: false }
@@ -34,6 +30,11 @@ function binaryProgress(goal: Goal): GoalProgress {
   return { currentUnits: completedCount, percent: Math.floor((score * 100) / goal.checklist.length), blank: false }
 }
 
+/**
+ * Live progress of a goal as of now. Exported so `closeGoal` can freeze the
+ * exact snapshot that the history view shows. `facts` are already windowed to
+ * the goal's own `startDay` — the progress measures what came after the goal.
+ */
 export function computeProgress(goal: Goal, facts: GoalsFacts): GoalProgress {
   if (isBinaryMetric(goal.metric)) return binaryProgress(goal)
   const current = getResolver(goal.metric).current(facts)
