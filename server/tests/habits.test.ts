@@ -105,6 +105,30 @@ describe('habits service', () => {
     expect(cur[0].logs).toEqual({})
   })
 
+  it('hides a habit from months that ended before it was created', () => {
+    const habit = createHabit('Чтение')
+    const current = monthKey(now())
+    const prev = addMonths(current, -1)
+
+    expect(habit.startDay).toBe(dayKey(now()))
+    expect(listHabits(prev)).toEqual([])
+    expect(listHabits(addMonths(current, -2))).toEqual([])
+    expect(listHabits(current).map((h) => h.id)).toEqual([habit.id])
+  })
+
+  it('keeps a mid-month habit in its creation month and reports its local start day', () => {
+    const habit = createHabit('Чтение')
+    const current = monthKey(now())
+    const stamp = `${current}-15 09:00:00`
+    getDb().prepare('UPDATE habits SET created_at = ? WHERE id = ?').run(stamp, habit.id)
+    const expected = dayKey(new Date(`${current}-15T09:00:00Z`))
+
+    const [listed] = listHabits(current)
+    expect(listed.startDay).toBe(expected)
+    expect(listed.logs).toEqual({})
+    expect(listHabits(addMonths(current, -1))).toEqual([])
+  })
+
   it('archives a habit as a soft delete: hidden from every month, logs preserved', () => {
     const habit = createHabit('Медитация')
     const today = dayKey(now())
@@ -138,10 +162,12 @@ describe('habits service', () => {
 
   it('does not duplicate a re-created habit on past months', () => {
     const first = createHabit('Медитация')
+    getDb().prepare('UPDATE habits SET created_at = ? WHERE id = ?').run('1999-12-01 10:00:00', first.id)
     setHabitLog(first.id, '2000-01-15', 'done')
     archiveHabit(first.id)
 
     const second = createHabit('Медитация')
+    getDb().prepare('UPDATE habits SET created_at = ? WHERE id = ?').run('1999-12-01 10:00:00', second.id)
     setHabitLog(second.id, '2000-01-16', 'done')
 
     const january = listHabits('2000-01')

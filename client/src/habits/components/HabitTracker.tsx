@@ -10,6 +10,7 @@ interface HabitTrackerProps {
   habits: HabitWithLogs[]
   month: string
   isCurrentMonth: boolean
+  sortable: boolean
   onSetLog: (id: number, date: string, status: HabitStatus | null) => Promise<void>
   onEdit: (habit: HabitWithLogs) => void
   onArchive: (id: number) => Promise<void>
@@ -31,6 +32,7 @@ interface HabitRowProps {
   days: MonthDay[]
   today: string
   isCurrentMonth: boolean
+  sortable: boolean
   confirmDelete: number | null
   setConfirmDelete: (id: number | null) => void
   onEdit: (habit: HabitWithLogs) => void
@@ -43,7 +45,7 @@ interface HabitRowProps {
 const actionCls =
   'flex h-6 w-6 items-center justify-center rounded-md text-slate-500 transition-colors duration-150 hover:bg-white/5 hover:text-slate-200'
 
-export function HabitTracker({ habits, month, isCurrentMonth, onSetLog, onEdit, onArchive, onReorder, onOrderCommit, onMove }: HabitTrackerProps) {
+export function HabitTracker({ habits, month, isCurrentMonth, sortable, onSetLog, onEdit, onArchive, onReorder, onOrderCommit, onMove }: HabitTrackerProps) {
   const [anchor, setAnchor] = useState<Anchor | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
 
@@ -93,6 +95,7 @@ export function HabitTracker({ habits, month, isCurrentMonth, onSetLog, onEdit, 
                 days={days}
                 today={today}
                 isCurrentMonth={isCurrentMonth}
+                sortable={sortable}
                 confirmDelete={confirmDelete}
                 setConfirmDelete={setConfirmDelete}
                 onEdit={onEdit}
@@ -140,6 +143,7 @@ function HabitRow({
   days,
   today,
   isCurrentMonth,
+  sortable,
   confirmDelete,
   setConfirmDelete,
   onEdit,
@@ -159,7 +163,11 @@ function HabitRow({
   // belongs to that control: framer only skips drags that start on text inputs,
   // so the listener is disabled entirely and started by hand here. The grip is a
   // button too, hence the explicit `data-drag-handle` escape hatch.
+  // Past months show only the habits that already existed, so dragging there
+  // would push that truncated subset to the top of the global `sort_order` and
+  // reshuffle the current month behind the user's back.
   const startDrag = (event: ReactPointerEvent<HTMLTableRowElement>) => {
+    if (!sortable) return
     if (event.button !== 0) return
     const target = event.target as Element | null
     if (!target) return
@@ -168,6 +176,7 @@ function HabitRow({
   }
 
   const moveByKeyboard = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (!sortable) return
     if (!event.altKey) return
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
     event.preventDefault()
@@ -200,11 +209,16 @@ function HabitRow({
           <div className="flex min-w-0 items-center gap-1.5">
             <button
               type="button"
-              data-drag-handle
+              data-drag-handle={sortable ? '' : undefined}
+              disabled={!sortable}
               onKeyDown={moveByKeyboard}
               aria-label={`Переместить «${habit.name}». Перетащите строку или нажмите Alt + стрелку вверх/вниз`}
-              title="Перетащите или Alt+↑/↓"
-              className="flex h-6 w-4 shrink-0 cursor-grab items-center justify-center rounded text-slate-700 transition-colors duration-150 hover:text-slate-400 focus-visible:text-slate-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400/50 active:cursor-grabbing"
+              title={sortable ? 'Перетащите или Alt+↑/↓' : 'Порядок меняется в текущем месяце'}
+              className={`flex h-6 w-4 shrink-0 items-center justify-center rounded text-slate-700 transition-colors duration-150 ${
+                sortable
+                  ? 'cursor-grab hover:text-slate-400 focus-visible:text-slate-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-400/50 active:cursor-grabbing'
+                  : 'cursor-default opacity-40'
+              }`}
             >
               <GripIcon className="h-3.5 w-3.5" />
             </button>
@@ -259,11 +273,14 @@ function HabitRow({
       {days.map((d) => {
         const status = habit.logs[d.date] ?? null
         const isToday = d.date === today
+        const beforeStart = d.date < habit.startDay
         return (
           <td key={d.date} className={`border-b border-white/[0.04] p-0.5 text-center ${isToday ? 'bg-indigo-400/[0.07]' : ''}`}>
             <button
               type="button"
+              disabled={beforeStart}
               aria-label={`${habit.name}, ${d.day} ${d.weekday}`}
+              title={beforeStart ? 'Привычка создана позже' : undefined}
               onClick={(e) => {
                 const rect = e.currentTarget.getBoundingClientRect()
                 onOpenCell({ habitId: habit.id, date: d.date, x: rect.left, cellTop: rect.top, cellBottom: rect.bottom })
@@ -275,9 +292,11 @@ function HabitRow({
                     ? 'bg-amber-500/15 font-semibold text-amber-300 hover:bg-amber-500/25'
                     : status === 'missed'
                       ? 'bg-rose-500/15 font-semibold text-rose-300 hover:bg-rose-500/25'
-                      : isToday
-                        ? 'bg-slate-700/40 text-slate-500 ring-1 ring-inset ring-indigo-400/40 hover:text-slate-300'
-                        : 'text-slate-500 opacity-0 group-hover:opacity-100 hover:text-slate-200'
+                      : beforeStart
+                        ? 'cursor-default text-slate-700'
+                        : isToday
+                          ? 'bg-slate-700/40 text-slate-500 ring-1 ring-inset ring-indigo-400/40 hover:text-slate-300'
+                          : 'text-slate-500 opacity-0 group-hover:opacity-100 hover:text-slate-200'
               }`}
             >
               {status === 'done' ? '✓' : status === 'partial' ? '%' : status === 'missed' ? '✕' : '·'}

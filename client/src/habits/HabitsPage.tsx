@@ -146,13 +146,16 @@ export function HabitsPage() {
 
           {habits.habits.length === 0 ? (
             <div className="rounded-2xl border border-white/[0.06] bg-slate-800/40 p-10 text-center text-sm text-slate-500 ring-1 ring-inset ring-white/[0.03]">
-              Привычек пока нет. Добавьте первую, чтобы вести трекинг.
+              {habits.isCurrentMonth
+                ? 'Привычек пока нет. Добавьте первую, чтобы вести трекинг.'
+                : 'В этом месяце привычек ещё не было.'}
             </div>
           ) : (
             <HabitTracker
               habits={habits.habits}
               month={habits.month}
               isCurrentMonth={habits.isCurrentMonth}
+              sortable={habits.isCurrentMonth}
               onSetLog={habits.setLog}
               onEdit={setEditing}
               onArchive={habits.archiveHabit}

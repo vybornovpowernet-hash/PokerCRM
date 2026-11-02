@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { HabitsPage } from '../src/habits/HabitsPage'
-import { addMonths, currentMonthKey, monthDays, monthLabel } from '../src/habits/metrics'
+import { addMonths, currentMonthKey, dayKey, monthDays, monthLabel } from '../src/habits/metrics'
 import type { HabitHistoryItem, HabitStatus, HabitWithLogs } from '../src/habits/habits.types'
 
 const mocks = vi.hoisted(() => ({ request: vi.fn() }))
@@ -19,6 +19,7 @@ function habit(over: Partial<HabitWithLogs> = {}): HabitWithLogs {
     name: 'Медитация',
     color: '#f1f5f9',
     createdAt: new Date().toISOString(),
+    startDay: dayKey(new Date()),
     archivedAt: null,
     sortOrder: 0,
     logs: {},
@@ -48,9 +49,16 @@ beforeEach(() => {
   mocks.request.mockReset()
 })
 
+function monthEndKey(month: string): string {
+  const days = monthDays(month)
+  return days[days.length - 1]?.date ?? `${month}-31`
+}
+
 function stubApi(active: () => HabitWithLogs[], archived: () => HabitHistoryItem[] = () => []): void {
   mocks.request.mockImplementation(async (path: string, init?: { method?: string; body?: string }) => {
     const method = init?.method ?? 'GET'
+    const month = /^\/habits\?month=(\d{4}-\d{2})$/.exec(path)?.[1] ?? currentMonthKey()
+    const visible = () => active().filter((h) => h.startDay <= monthEndKey(month))
     if (method === 'GET' && path === '/habits/history') {
       return { habits: archived() }
     }
@@ -75,7 +83,7 @@ function stubApi(active: () => HabitWithLogs[], archived: () => HabitHistoryItem
     if (method === 'DELETE' && /^\/habits\/\d+$/.test(path)) {
       return { ok: true }
     }
-    return { habits: active() }
+    return { habits: visible() }
   })
 }
 
@@ -376,5 +384,57 @@ describe('HabitsPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Следующий месяц' }))
     expect(await screen.findByText(monthLabel(currentMonthKey()))).not.toBeNull()
+  })
+
+  it('hides a habit created later from a past month and explains the empty grid', async () => {
+    const prev = addMonths(currentMonthKey(), -1)
+    stubApi(() => [habit({ name: 'Медитация' })])
+    const user = userEvent.setup()
+    render(<HabitsPage />)
+
+    await screen.findByText('Медитация')
+    await user.click(screen.getByRole('button', { name: 'Предыдущий месяц' }))
+    await screen.findByText(monthLabel(prev))
+
+    expect(await screen.findByText('В этом месяце привычек ещё не было.')).not.toBeNull()
+    expect(screen.queryByText('Медитация')).toBeNull()
+    expect(screen.queryByText('Привычек пока нет. Добавьте первую, чтобы вести трекинг.')).toBeNull()
+  })
+
+  it('keeps a mid-month habit and makes the days before its creation inert', async () => {
+    const month = currentMonthKey()
+    const start = `${month}-15`
+    stubApi(() => [habit({ startDay: start })])
+    const user = userEvent.setup()
+    render(<HabitsPage />)
+
+    await screen.findByText('Медитация')
+
+    const before = screen.getByRole('button', { name: cellName('Медитация', `${month}-01`) })
+    expect(before).toHaveProperty('disabled', true)
+    await user.click(before)
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    const onStart = screen.getByRole('button', { name: cellName('Медитация', start) })
+    expect(onStart).toHaveProperty('disabled', false)
+    await user.click(onStart)
+    expect(screen.getByRole('dialog')).not.toBeNull()
+  })
+
+  it('does not reorder from a past month, where the list is truncated', async () => {
+    const prev = addMonths(currentMonthKey(), -1)
+    stubApi(() => [habit({ startDay: `${prev}-01` })])
+    const user = userEvent.setup()
+    render(<HabitsPage />)
+
+    await screen.findByText('Медитация')
+    await user.click(screen.getByRole('button', { name: 'Предыдущий месяц' }))
+    await screen.findByText(monthLabel(prev))
+    mocks.request.mockClear()
+
+    const grip = screen.getByRole('button', { name: /Переместить «Медитация»/ })
+    expect(grip).toHaveProperty('disabled', true)
+    fireEvent.keyDown(grip, { key: 'ArrowUp', altKey: true })
+    expect(mocks.request).not.toHaveBeenCalled()
   })
 })

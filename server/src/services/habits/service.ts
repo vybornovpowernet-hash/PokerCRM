@@ -66,11 +66,13 @@ function validateStatus(value: unknown): HabitStatus | null {
 // An archived habit disappears from every month, past ones included: the grid
 // only ever renders habits that are currently tracked. Archived habits (and all
 // of their logs) stay reachable through the history view and `restoreHabit`.
+// A habit created after the month end is hidden from past months.
 export function listHabits(monthValue: unknown): HabitWithLogs[] {
   const month = validateMonth(monthValue)
+  const start = monthStart(month)
   const end = monthEnd(month)
-  const habits = listActiveHabitRows()
-  const logs = listLogRowsForMonth(monthStart(month), end)
+  const habits = listActiveHabitRows().filter((habit) => habit.startDay <= end)
+  const logs = listLogRowsForMonth(start, end)
   const byHabit = new Map<number, Record<string, HabitStatus>>()
   for (const log of logs) {
     const bucket = byHabit.get(log.habitId) ?? {}

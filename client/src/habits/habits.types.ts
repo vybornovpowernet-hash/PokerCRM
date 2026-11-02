@@ -5,6 +5,7 @@ export interface Habit {
   name: string
   color: string
   createdAt: string
+  startDay: string
   archivedAt: string | null
   sortOrder: number
 }

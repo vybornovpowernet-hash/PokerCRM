@@ -5,6 +5,16 @@ export function dayKey(d: Date = new Date()): string {
   return `${y}-${m}-${day}`
 }
 
+/** Converts a UTC timestamp (`YYYY-MM-DD HH:MM:SS`, SQLite style) to a local YYYY-MM-DD day key. */
+export function dayKeyFromUtcStamp(value: string): string | null {
+  if (typeof value !== 'string') return null
+  const match = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/.exec(value.trim())
+  if (!match) return null
+  const d = new Date(`${match[1]}T${match[2]}Z`)
+  if (Number.isNaN(d.getTime())) return null
+  return dayKey(d)
+}
+
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/
 
 export function isValidDayKey(s: string): boolean {

@@ -1,5 +1,6 @@
 import { getDb } from '../../db.js'
 import { HttpError } from '../../lib/errors.js'
+import { dayKeyFromUtcStamp } from '../../lib/date.js'
 import type { Habit, HabitStatus } from './types.js'
 
 interface HabitRow {
@@ -18,7 +19,8 @@ interface HabitLogRow {
 }
 
 function mapHabit(r: HabitRow): Habit {
-  return { id: r.id, name: r.name, color: r.color, createdAt: r.created_at, archivedAt: r.archived_at, sortOrder: r.sort_order }
+  const startDay = dayKeyFromUtcStamp(r.created_at) ?? r.created_at.slice(0, 10)
+  return { id: r.id, name: r.name, color: r.color, createdAt: r.created_at, startDay, archivedAt: r.archived_at, sortOrder: r.sort_order }
 }
 
 export function listActiveHabitRows(): Habit[] {
