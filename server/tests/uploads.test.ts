@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HttpError } from '../src/lib/errors.js'
+import { projectRoot } from '../src/db.js'
+import * as uploadsModule from '../src/services/uploads.js'
 import { DIARY_DIR, UPLOADS_ROOT, deleteDiaryImage, hasImageSignature, isDiaryImagePath, isSupportedImageMime, saveDiaryImage } from '../src/services/uploads.js'
 
 const written: string[] = []
@@ -15,6 +18,51 @@ WEBP_HEADER.write('WEBP', 8, 'latin1')
 
 afterEach(() => {
   for (const path of written.splice(0)) deleteDiaryImage(path)
+})
+
+describe('изоляция тестовых загрузок от боевого каталога', () => {
+  const liveRoot = join(projectRoot, 'data', 'uploads')
+  const liveDiary = join(liveRoot, 'diary')
+
+  function rootResolver(): (env: Record<string, string | undefined>, fallback: string) => string {
+    const fn = (uploadsModule as Record<string, unknown>).resolveUploadsRoot
+    if (typeof fn !== 'function') {
+      throw new Error('resolveUploadsRoot не экспортируется из services/uploads.ts')
+    }
+    return fn as (env: Record<string, string | undefined>, fallback: string) => string
+  }
+
+  it('resolveUploadsRoot: без VITEST оставляет боевой корень', () => {
+    expect(rootResolver()({ POKER_CRM_UPLOADS_ROOT: join(tmpdir(), 'poker-crm-uploads-a') }, liveRoot)).toBe(liveRoot)
+    expect(rootResolver()({}, liveRoot)).toBe(liveRoot)
+  })
+
+  it('resolveUploadsRoot: в тестовом режиме берёт абсолютный путь из окружения', () => {
+    const forced = join(tmpdir(), 'poker-crm-uploads-b')
+    expect(rootResolver()({ VITEST: 'true', POKER_CRM_UPLOADS_ROOT: forced }, liveRoot)).toBe(forced)
+  })
+
+  it('resolveUploadsRoot: в тестовом режиме без пути бросает, а не молчит', () => {
+    expect(() => rootResolver()({ VITEST: 'true' }, liveRoot)).toThrow(/POKER_CRM_UPLOADS_ROOT/)
+    expect(() => rootResolver()({ VITEST: 'true', POKER_CRM_UPLOADS_ROOT: '   ' }, liveRoot)).toThrow(/POKER_CRM_UPLOADS_ROOT/)
+  })
+
+  it('resolveUploadsRoot: относительный путь в тестовом режиме запрещён', () => {
+    expect(() => rootResolver()({ VITEST: 'true', POKER_CRM_UPLOADS_ROOT: 'data/uploads' }, liveRoot)).toThrow(/абсолютн/)
+  })
+
+  it('боевой каталог под тестами не получает файлов, всё идёт в os.tmpdir', () => {
+    const path = saveDiaryImage(PNG_HEADER, 'image/png')
+    written.push(path)
+    const name = path.slice('diary/'.length)
+
+    // Точечная проверка конкретного имени, а не сравнение всего списка боевого
+    // каталога: пользователь может сохранить запись с картинкой в живом
+    // приложении прямо во время прогона, и «список не изменился» упало бы ложно.
+    expect(UPLOADS_ROOT.startsWith(tmpdir())).toBe(true)
+    expect(existsSync(join(UPLOADS_ROOT, path))).toBe(true)
+    expect(existsSync(join(liveDiary, name))).toBe(false)
+  })
 })
 
 describe('uploads service', () => {

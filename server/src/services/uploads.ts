@@ -1,10 +1,29 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { projectRoot } from '../db.js'
 import { HttpError } from '../lib/errors.js'
 
-export const UPLOADS_ROOT = join(projectRoot, 'data', 'uploads')
+/**
+ * Корень для файлов дневника. Вне тестов это всегда `data/uploads` рядом с
+ * приложением. В тестовом процессе (`VITEST=true`) боевой путь запрещён: воркер
+ * обязан подставить песочницу через `POKER_CRM_UPLOADS_ROOT`, иначе тест тихо
+ * писал бы (и удалял бы) в боевые данные пользователя. Молчаливый откат сюда
+ * не вариант — падение громче и честнее.
+ */
+export function resolveUploadsRoot(env: Record<string, string | undefined>, liveRoot: string): string {
+  if (env.VITEST !== 'true') return liveRoot
+  const forced = env.POKER_CRM_UPLOADS_ROOT?.trim() ?? ''
+  if (forced === '') {
+    throw new Error('VITEST=true, но POKER_CRM_UPLOADS_ROOT не задан: тесты не должны писать в боевой data/uploads (см. server/tests/setup.ts)')
+  }
+  if (!isAbsolute(forced)) {
+    throw new Error(`POKER_CRM_UPLOADS_ROOT должен быть абсолютным путём, получено «${forced}»`)
+  }
+  return forced
+}
+
+export const UPLOADS_ROOT = resolveUploadsRoot(process.env, join(projectRoot, 'data', 'uploads'))
 export const DIARY_DIR = join(UPLOADS_ROOT, 'diary')
 
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024
