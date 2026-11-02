@@ -1,3 +1,4 @@
+import { dayKey } from '../lib/date'
 import type { HabitStatus, HabitWithLogs } from './habits.types'
 
 export const MONTHS_RU = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
@@ -13,12 +14,7 @@ export interface MonthDay {
   weekend: boolean
 }
 
-export function dayKey(d: Date): string {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
+export { dayKey }
 
 export function currentMonthKey(): string {
   return dayKey(new Date()).slice(0, 7)

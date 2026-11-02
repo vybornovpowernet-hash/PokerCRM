@@ -1,3 +1,4 @@
+import { dayKey } from '../lib/date'
 import { formatThousands } from '../lib/money'
 import type { ChecklistStatus, Goal, GoalMetric, GoalStatus } from './goals.types'
 
@@ -104,12 +105,7 @@ export function pluralDays(n: number): string {
   return 'дней'
 }
 
-export function dayKey(d: Date): string {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
+export { dayKey }
 
 export function daysBetween(fromDayKey: string, toDayKey: string): number {
   return Math.round((Date.parse(toDayKey) - Date.parse(fromDayKey)) / 86_400_000)

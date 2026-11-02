@@ -1,30 +1,13 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
+import { ChevronIcon } from '../../components/icons'
 
 interface ImageLightboxProps {
   images: string[]
   startIndex?: number
   alt?: string
   onClose: () => void
-}
-
-function ChevronIcon({ dir }: { dir: 'left' | 'right' }) {
-  return (
-    <svg
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d={dir === 'left' ? 'm15 18-6-6 6-6' : 'm9 18 6-6-6-6'} />
-    </svg>
-  )
 }
 
 export function ImageLightbox({ images, startIndex = 0, alt, onClose }: ImageLightboxProps) {
@@ -109,7 +92,7 @@ export function ImageLightbox({ images, startIndex = 0, alt, onClose }: ImageLig
             disabled={atStart}
             className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-slate-200 backdrop-blur transition hover:bg-black/70 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 sm:left-4"
           >
-            <ChevronIcon dir="left" />
+            <ChevronIcon dir="left" size={24} strokeWidth={2} />
           </button>
           <button
             type="button"
@@ -119,7 +102,7 @@ export function ImageLightbox({ images, startIndex = 0, alt, onClose }: ImageLig
             disabled={atEnd}
             className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/50 p-2 text-slate-200 backdrop-blur transition hover:bg-black/70 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 sm:right-4"
           >
-            <ChevronIcon dir="right" />
+            <ChevronIcon dir="right" size={24} strokeWidth={2} />
           </button>
           <div
             aria-live="polite"

@@ -87,6 +87,17 @@ function labelOrder(): string[] {
     .map((node) => node.textContent ?? '')
 }
 
+function dayKeyOf(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function monthBounds(baseKey: string, delta: number): { from: string; to: string } {
+  const [year, month] = baseKey.split('-').map(Number) as [number, number]
+  const first = new Date(year, month - 1 + delta, 1)
+  const last = new Date(first.getFullYear(), first.getMonth() + 1, 0)
+  return { from: dayKeyOf(first), to: dayKeyOf(last) }
+}
+
 describe('TournamentsPage: virtualized groups list', () => {
   it('renders one row per group and keeps the header', async () => {
     render(<TournamentsPage />)
@@ -118,5 +129,44 @@ describe('TournamentsPage: virtualized groups list', () => {
     await waitFor(() => expect(screen.getByText('2026-09-30')).toBeTruthy())
     expect(screen.getByText('2026-09-29')).toBeTruthy()
     expect(screen.getByText('Ручные строки (без названия): агрегируются по лимиту бай-ина.')).toBeTruthy()
+  })
+})
+
+describe('TournamentsPage month navigation', () => {
+  it('requests the whole previous month when the arrow is clicked', async () => {
+    render(<TournamentsPage />)
+
+    await waitFor(() => expect(mocks.summary).toHaveBeenCalledTimes(1))
+    const [initialFrom] = mocks.summary.mock.calls[0] as [string, string, number[]]
+    const expected = monthBounds(initialFrom, -1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Предыдущий месяц' }))
+
+    await waitFor(() => expect(mocks.summary).toHaveBeenCalledTimes(2))
+    expect(mocks.summary.mock.calls[1]).toEqual([expected.from, expected.to, []])
+  })
+
+  it('disables the forward arrow in the current month', async () => {
+    render(<TournamentsPage />)
+
+    await waitFor(() => expect(mocks.summary).toHaveBeenCalledTimes(1))
+    expect((screen.getByRole('button', { name: 'Следующий месяц' }) as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Предыдущий месяц' }))
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Следующий месяц' }) as HTMLButtonElement).disabled).toBe(false)
+    )
+  })
+
+  it('keeps the room filter when the month changes', async () => {
+    render(<TournamentsPage />)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'GG' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'GG' }))
+    await waitFor(() => expect(mocks.summary).toHaveBeenCalledTimes(2))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Предыдущий месяц' }))
+    await waitFor(() => expect(mocks.summary).toHaveBeenCalledTimes(3))
+    expect(mocks.summary.mock.calls[2]?.[2]).toEqual([room.id])
   })
 })

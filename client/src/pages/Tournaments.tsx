@@ -1,45 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { PeriodFilter } from '../components/PeriodFilter'
 import { api } from '../lib/api'
+import { rangeFor } from '../lib/date'
 import { formatAmount } from '../lib/money'
+import { activeBtn, inactiveBtn } from '../lib/ui'
 import type { MbrSummary, Room, TournamentGroup, TournamentSummary } from '../lib/types'
 
-const PRESETS = [
-  { id: 'day', label: 'За день' },
-  { id: 'week', label: 'За неделю' },
-  { id: 'month', label: 'За месяц' },
-  { id: 'year', label: 'За год' }
-] as const
-
-type PresetId = (typeof PRESETS)[number]['id']
 type SortKey = 'label' | 'count' | 'buyin' | 'totalProfitUsd' | 'roiPercent' | 'bestRank' | 'avgEntrants'
 type SortDir = 'asc' | 'desc' | null
 
-const buttonCls = 'rounded-lg border px-3 py-1.5 text-sm transition whitespace-nowrap'
-const activeBtn = `${buttonCls} border-slate-500 bg-slate-700 text-slate-100`
-const inactiveBtn = `${buttonCls} border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-100`
-const inputCls =
-  'rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-sm text-slate-100 shadow-inner outline-none transition focus:border-slate-500'
 const thCls = 'px-3 py-2 text-left text-[11px] uppercase tracking-wider text-slate-500 whitespace-nowrap'
 const TOURNEY_COLS = 'minmax(11rem, 1fr) 5rem 6.5rem 7.5rem 5rem 4.5rem 4.5rem 2.25rem'
 const DETAIL_COLS = 'minmax(6rem, 1fr) minmax(6rem, 1fr) 5rem 7rem'
-
-function dayKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-function rangeFor(preset: PresetId): { from: string; to: string } {
-  const now = new Date()
-  const to = dayKey(now)
-  if (preset === 'day') return { from: to, to }
-  if (preset === 'week') {
-    const d = new Date(now)
-    d.setDate(d.getDate() - 6)
-    return { from: dayKey(d), to }
-  }
-  if (preset === 'month') return { from: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`, to }
-  return { from: `${now.getFullYear()}-01-01`, to }
-}
 
 function profitCls(v: number | null): string {
   if (v === null) return 'text-slate-500'
@@ -99,16 +72,17 @@ function SortHeader({
 }
 
 export default function TournamentsPage() {
-  const initial = rangeFor('month')
-  const [preset, setPreset] = useState<PresetId | null>('month')
-  const [dateFrom, setDateFrom] = useState(initial.from)
-  const [dateTo, setDateTo] = useState(initial.to)
+  const [dateFrom, setDateFrom] = useState(() => rangeFor('month').from)
+  const [dateTo, setDateTo] = useState(() => rangeFor('month').to)
   const [rooms, setRooms] = useState<Room[]>([])
   const [selectedRoomIds, setSelectedRoomIds] = useState<number[]>([])
   const [summary, setSummary] = useState<TournamentSummary | null>(null)
   const [mbr, setMbr] = useState<MbrSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** First load only — the skeleton. Later loads keep the previous picture. */
   const [loading, setLoading] = useState(true)
+  /** A refetch on top of already rendered data: the table stays, dimmed. */
+  const [refreshing, setRefreshing] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('totalProfitUsd')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -121,22 +95,35 @@ export default function TournamentsPage() {
   }, [])
 
   useEffect(() => {
-    setLoading(true)
+    // Month arrows fire one request per click: ignore the answer of a period the
+    // user has already left instead of letting it overwrite fresher data.
+    let alive = true
+    setRefreshing(true)
     api.tournaments
       .summary(dateFrom, dateTo, selectedRoomIds)
       .then((r) => {
+        if (!alive) return
+        setError(null)
         setSummary(r.summary)
         setMbr(r.mbr)
+        setLoading(false)
       })
-      .catch((e) => setError(e instanceof Error ? e.message : 'Не удалось загрузить турниры'))
-      .finally(() => setLoading(false))
+      .catch((e) => {
+        if (!alive) return
+        setError(e instanceof Error ? e.message : 'Не удалось загрузить турниры')
+        setLoading(false)
+      })
+      .finally(() => {
+        if (alive) setRefreshing(false)
+      })
+    return () => {
+      alive = false
+    }
   }, [dateFrom, dateTo, selectedRoomIds])
 
-  function selectPreset(id: PresetId) {
-    setPreset(id)
-    const r = rangeFor(id)
-    setDateFrom(r.from)
-    setDateTo(r.to)
+  function applyRange(range: { from: string; to: string }) {
+    setDateFrom(range.from)
+    setDateTo(range.to)
   }
 
   function toggleRoom(id: number) {
@@ -222,41 +209,7 @@ export default function TournamentsPage() {
     <div className="space-y-6">
       {error && <div className="rounded-lg border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">{error}</div>}
 
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex flex-wrap gap-2">
-          {PRESETS.map((p) => (
-            <button key={p.id} onClick={() => selectPreset(p.id)} className={preset === p.id ? activeBtn : inactiveBtn}>
-              {p.label}
-            </button>
-          ))}
-        </div>
-        <div className="ml-auto flex flex-wrap items-center gap-4">
-          <label className="flex items-center gap-2">
-            <span className="text-sm text-slate-400">Начало</span>
-            <input
-              type="date"
-              className={`${inputCls} w-auto`}
-              value={dateFrom}
-              onChange={(e) => {
-                setPreset(null)
-                setDateFrom(e.target.value)
-              }}
-            />
-          </label>
-          <label className="flex items-center gap-2">
-            <span className="text-sm text-slate-400">Конец</span>
-            <input
-              type="date"
-              className={`${inputCls} w-auto`}
-              value={dateTo}
-              onChange={(e) => {
-                setPreset(null)
-                setDateTo(e.target.value)
-              }}
-            />
-          </label>
-        </div>
-      </div>
+      <PeriodFilter dateFrom={dateFrom} dateTo={dateTo} onChange={applyRange} />
 
       {rooms.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
@@ -284,12 +237,15 @@ export default function TournamentsPage() {
         </div>
       )}
 
-      {loading ? (
+      {loading && !summary ? (
         <div className="rounded-xl border border-slate-700 bg-slate-800/80 p-10 text-center text-sm text-slate-500 shadow-lg shadow-black/40">
           Загрузка…
         </div>
       ) : (
-        <>
+        <div
+          aria-busy={refreshing}
+          className={`space-y-6 transition-opacity duration-200 ${refreshing ? 'opacity-60' : 'opacity-100'}`}
+        >
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
             {cards.map((c) => (
               <div key={c.label} className="rounded-xl border border-slate-700 bg-slate-800/80 p-4 shadow-lg shadow-black/40">
@@ -359,7 +315,7 @@ export default function TournamentsPage() {
               <div className="px-4 py-4 text-sm text-slate-500">Нет MBR-турниров за период</div>
             )}
           </section>
-        </>
+        </div>
       )}
     </div>
   )
