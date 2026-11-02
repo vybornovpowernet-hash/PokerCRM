@@ -1,9 +1,10 @@
-import { useState } from 'react'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { StrictMode, useState } from 'react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { GoalCard } from '../src/goals/components/GoalCard'
 import type { ChecklistItem, GoalWithProgress } from '../src/goals/goals.types'
+import { blobUrls } from './setup'
 
 function makeGoal(over: Partial<GoalWithProgress> = {}): GoalWithProgress {
   return {
@@ -156,6 +157,110 @@ describe('GoalCard', () => {
     expect(screen.getByText('Дневник')).toBeTruthy()
     await user.click(screen.getByRole('button', { expanded: true }))
     await waitFor(() => expect(screen.queryByText('Дневник')).toBeNull())
+  })
+
+  it('locks the note editor while the upload is in flight and unlocks it after', async () => {
+    const user = userEvent.setup()
+    let release: () => void = () => undefined
+    const onUploadImage = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          release = () => resolve('diary/lock.png')
+        })
+    )
+    const onAddEntry = vi.fn().mockResolvedValue(undefined)
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} onAddEntry={onAddEntry} />)
+    const editor = await openComposer(user)
+
+    pasteImage(editor, png('lock.png'))
+    await user.type(editor, 'Текст до блокировки')
+    expect(editor.getAttribute('contenteditable')).toBe('true')
+
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+
+    // Пока идёт сохранение, ввод заблокирован, панель форматирования недоступна:
+    // иначе набранное поверх сохранения стирается и теряется вместе с ним.
+    await waitFor(() => expect(editor.getAttribute('contenteditable')).toBe('false'))
+    expect(screen.getByRole('toolbar', { name: 'Форматирование' }).hasAttribute('inert')).toBe(true)
+    expect(onAddEntry).not.toHaveBeenCalled()
+
+    release()
+    await waitFor(() => expect(onAddEntry).toHaveBeenCalledTimes(1))
+    expect(onAddEntry).toHaveBeenCalledWith(1, expect.any(String), ['diary/lock.png'])
+  })
+
+  it('re-opens the editor, empty, after a successful save', async () => {
+    const user = userEvent.setup()
+    const onUploadImage = vi.fn().mockResolvedValue('diary/ok.png')
+    const onAddEntry = vi.fn().mockResolvedValue(undefined)
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} onAddEntry={onAddEntry} />)
+    const editor = await openComposer(user)
+
+    pasteImage(editor, png('ok.png'))
+    await user.type(editor, 'Готовая заметка')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+
+    await waitFor(() => expect(screen.getByLabelText('Заметка в дневник').textContent).toBe(''))
+    const fresh = screen.getByLabelText('Заметка в дневник')
+    expect(fresh.getAttribute('contenteditable')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Добавить' }).hasAttribute('disabled')).toBe(true)
+    expect(previews()).toHaveLength(0)
+    expect(screen.getByRole('toolbar', { name: 'Форматирование' }).hasAttribute('inert')).toBe(false)
+  })
+
+  it('keeps the draft text editable and intact after a failed upload', async () => {
+    const user = userEvent.setup()
+    const onUploadImage = vi.fn().mockRejectedValue(new Error('offline'))
+    const onAddEntry = vi.fn()
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} onAddEntry={onAddEntry} />)
+    const editor = await openComposer(user)
+
+    pasteImage(editor, png('bad.png'))
+    await user.type(editor, 'Не отправилось')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe('Не удалось загрузить изображение')
+    await waitFor(() => expect(editor.getAttribute('contenteditable')).toBe('true'))
+    expect(editor.textContent).toBe('Не отправилось')
+    expect(previews()).toHaveLength(1)
+    expect(onAddEntry).not.toHaveBeenCalled()
+  })
+
+  it('does not resurrect a saved note through undo', async () => {
+    const user = userEvent.setup()
+    const onUploadImage = vi.fn().mockResolvedValue('diary/undo.png')
+    const onAddEntry = vi.fn().mockResolvedValue(undefined)
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} onAddEntry={onAddEntry} />)
+    await openComposer(user)
+
+    const typed = screen.getByLabelText('Заметка в дневник')
+    await user.type(typed, 'Уже сохранено')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+
+    // После сохранения редактор — новый экземпляр с пустой историей, поэтому
+    // держимся только за актуальный узел, а не за тот, в котором печатали.
+    const editor = await waitFor(() => {
+      const fresh = screen.getByLabelText('Заметка в дневник')
+      expect(fresh.textContent).toBe('')
+      return fresh
+    })
+    expect(onAddEntry).toHaveBeenCalledTimes(1)
+
+    await user.click(editor)
+    await user.keyboard('{Control>}{z}{/Control}')
+
+    // Отмена не должна вернуть в черновик уже сохранённый текст: иначе кнопка
+    // снова станет активной и тот же текст уйдёт второй записью.
+    expect(editor.textContent).toBe('')
+    expect(screen.getByRole('button', { name: 'Добавить' }).hasAttribute('disabled')).toBe(true)
+    expect(onAddEntry).toHaveBeenCalledTimes(1)
+
+    // Негативный контроль: ввод и отмена в этом же узле работают.
+    await user.type(editor, 'абв')
+    expect(editor.textContent).toBe('абв')
+    await user.keyboard('{Control>}{z}{/Control}')
+    expect(editor.textContent).toBe('')
   })
 
   it('submits a diary note and clears the input', async () => {
@@ -515,25 +620,283 @@ describe('GoalCard', () => {
     await waitFor(() => expect(document.body.style.overflow).toBe(''))
   })
 
-  it('uploads an image pasted into the composer', async () => {
-    const user = userEvent.setup()
-    const onUploadImage = vi.fn().mockResolvedValue('diary/pasted.png')
-    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} />)
+  const png = (name: string) => new File(['png'], name, { type: 'image/png' })
+
+  async function openComposer(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
     await user.click(screen.getByRole('button', { expanded: false }))
     await user.click(screen.getByRole('button', { name: 'Редактировать цель' }))
+    return screen.getByLabelText('Заметка в дневник')
+  }
 
-    const editor = screen.getByLabelText('Заметка в дневник')
-    const file = new File(['png'], 'shot.png', { type: 'image/png' })
+  function pasteImage(editor: HTMLElement, file: File): void {
     fireEvent.paste(editor, {
-      clipboardData: {
-        files: [file],
-        items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }],
-        getData: () => ''
-      }
+      clipboardData: { files: [file], items: [{ kind: 'file', type: file.type, getAsFile: () => file }], getData: () => '' }
+    })
+  }
+
+  function pickFiles(files: File[]): void {
+    const input = document.querySelector('input[type=file]') as HTMLInputElement
+    fireEvent.change(input, { target: { files } })
+  }
+
+  const previews = () => screen.queryAllByAltText('Вложение')
+  const savedUrls = (url: string) => blobUrls.revoked.filter((u) => u === url).length
+  // Столько же, сколько разрешает композер и сервер (server/src/services/goals/service.ts).
+  const MAX_IMAGES = 10
+
+  it('keeps a pasted image in the browser and uploads it only when the note is saved', async () => {
+    const user = userEvent.setup()
+    const onUploadImage = vi.fn().mockResolvedValue('diary/pasted.png')
+    const onAddEntry = vi.fn().mockResolvedValue(undefined)
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} onAddEntry={onAddEntry} />)
+    const editor = await openComposer(user)
+
+    const file = png('shot.png')
+    pasteImage(editor, file)
+
+    expect(previews()).toHaveLength(1)
+    expect(previews()[0]?.getAttribute('src')).toMatch(/^blob:/)
+    expect(onUploadImage).not.toHaveBeenCalled()
+
+    await user.type(editor, 'Заметка')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+
+    await waitFor(() => expect(onUploadImage).toHaveBeenCalledTimes(1))
+    expect(onUploadImage).toHaveBeenCalledWith(file)
+    expect(onAddEntry).toHaveBeenCalledWith(1, expect.any(String), ['diary/pasted.png'])
+  })
+
+  it('adds exactly one attachment per pasted image', async () => {
+    const user = userEvent.setup()
+    const onUploadImage = vi.fn()
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} />)
+    const editor = await openComposer(user)
+
+    pasteImage(editor, png('one.png'))
+
+    expect(previews()).toHaveLength(1)
+    expect(onUploadImage).not.toHaveBeenCalled()
+  })
+
+  it('uploads every local image once and hands the note the paths in the visible order', async () => {
+    const user = userEvent.setup()
+    const order: string[] = []
+    const onUploadImage = vi.fn(async (file: File) => {
+      order.push(`upload:${file.name}`)
+      return `diary/${file.name}`
+    })
+    const onAddEntry = vi.fn(async () => {
+      order.push('entry')
+    })
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} onAddEntry={onAddEntry} />)
+    const editor = await openComposer(user)
+
+    pasteImage(editor, png('a.png'))
+    pickFiles([png('b.png')])
+    await user.type(editor, 'Две картинки')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+
+    await waitFor(() => expect(onAddEntry).toHaveBeenCalled())
+    expect(order).toEqual(['upload:a.png', 'upload:b.png', 'entry'])
+    expect(onAddEntry).toHaveBeenCalledWith(1, expect.any(String), ['diary/a.png', 'diary/b.png'])
+  })
+
+  it('removes an attachment without a server call and frees exactly its blob url', async () => {
+    const user = userEvent.setup()
+    const onUploadImage = vi.fn()
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} />)
+    const editor = await openComposer(user)
+
+    pasteImage(editor, png('gone.png'))
+    const url = previews()[0]?.getAttribute('src') ?? ''
+    expect(url).toMatch(/^blob:/)
+
+    await user.click(screen.getByRole('button', { name: 'Убрать изображение' }))
+
+    expect(previews()).toHaveLength(0)
+    expect(onUploadImage).not.toHaveBeenCalled()
+    expect(savedUrls(url)).toBe(1)
+  })
+
+  it('keeps the draft when an upload fails and the retry uploads only the missing file', async () => {
+    const user = userEvent.setup()
+    const onUploadImage = vi.fn().mockResolvedValueOnce('diary/first.png').mockRejectedValueOnce(new Error('network'))
+    const onAddEntry = vi.fn()
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} onAddEntry={onAddEntry} />)
+    const editor = await openComposer(user)
+
+    const first = png('first.png')
+    const second = png('second.png')
+    pasteImage(editor, first)
+    pasteImage(editor, second)
+    const firstUrl = previews()[0]?.getAttribute('src') ?? ''
+    await user.type(editor, 'Половина загрузилась')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(onAddEntry).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Заметка в дневник').textContent).toBe('Половина загрузилась')
+    expect(previews()).toHaveLength(2)
+
+    onUploadImage.mockResolvedValue('diary/second.png')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+
+    await waitFor(() => expect(onAddEntry).toHaveBeenCalled())
+    expect(onUploadImage).toHaveBeenCalledTimes(3)
+    expect((onUploadImage.mock.calls[2]![0] as File).name).toBe('second.png')
+    expect(onAddEntry).toHaveBeenCalledWith(1, expect.any(String), ['diary/first.png', 'diary/second.png'])
+    expect(savedUrls(firstUrl)).toBe(1)
+  })
+
+  it('lets an already uploaded attachment be dropped, leaving the remaining paths', async () => {
+    const user = userEvent.setup()
+    const onUploadImage = vi.fn(async (file: File) => `diary/${file.name}`)
+    const onAddEntry = vi.fn().mockRejectedValue(new Error('offline'))
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} onAddEntry={onAddEntry} />)
+    const editor = await openComposer(user)
+
+    pasteImage(editor, png('left.png'))
+    pasteImage(editor, png('dropped.png'))
+    await user.type(editor, 'Оба загружены, заметка не сохранилась')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+    await screen.findByRole('alert')
+
+    await user.click(screen.getAllByRole('button', { name: 'Убрать изображение' })[1]!)
+
+    onAddEntry.mockResolvedValue(undefined)
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+    await waitFor(() => expect(onAddEntry).toHaveBeenCalledTimes(2))
+    expect(onAddEntry).toHaveBeenLastCalledWith(1, expect.any(String), ['diary/left.png'])
+    // оба файла уже были загружены в первой попытке — второй прогон загрузок не делает
+    expect(onUploadImage).toHaveBeenCalledTimes(2)
+  })
+
+  it('resets the form and re-enables the button after saving inside StrictMode', async () => {
+    const user = userEvent.setup()
+    const onUploadImage = vi.fn().mockResolvedValue('diary/twice.png')
+    const onAddEntry = vi.fn().mockResolvedValue(undefined)
+    render(
+      <StrictMode>
+        <Harness goal={makeGoal()} onUploadImage={onUploadImage} onAddEntry={onAddEntry} />
+      </StrictMode>
+    )
+    const editor = await openComposer(user)
+
+    pasteImage(editor, png('twice.png'))
+    await user.type(editor, 'Проверка в StrictMode')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+
+    // Форма обязана сброситься и разблокироваться даже после двойного вызова эффектов.
+    await waitFor(() => expect(screen.getByLabelText('Заметка в дневник').textContent).toBe(''))
+    expect(previews()).toHaveLength(0)
+    expect(onAddEntry).toHaveBeenCalledTimes(1)
+    // Кнопка вернулась из «Сохраняется…»: значит setSaving(false) до пользователя дошёл.
+    const add = screen.getByRole('button', { name: 'Добавить' })
+    // Пустое поле по правилам формы недоступно — проверяем возобновляемость вводом.
+    expect(add.hasAttribute('disabled')).toBe(true)
+    await user.type(screen.getByLabelText('Заметка в дневник'), 'Второй раз')
+    expect((screen.getByRole('button', { name: 'Добавить' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('keeps every image from three pastes made in one act', async () => {
+    const user = userEvent.setup()
+    const onUploadImage = vi.fn()
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} />)
+    const editor = await openComposer(user)
+
+    await act(async () => {
+      pasteImage(editor, png('a.png'))
+      pasteImage(editor, png('b.png'))
+      pasteImage(editor, png('c.png'))
     })
 
-    await waitFor(() => expect(onUploadImage).toHaveBeenCalledWith(file))
-    expect(await screen.findByAltText('Вложение')).toBeTruthy()
+    const urls = previews().map((img) => img.getAttribute('src') ?? '')
+    expect(urls).toHaveLength(3)
+    expect(new Set(urls).size).toBe(3)
+    expect(onUploadImage).not.toHaveBeenCalled()
+
+    await act(async () => {
+      for (let i = 0; i < 8; i++) pasteImage(editor, png(`fill-${i}.png`))
+    })
+    expect(previews()).toHaveLength(MAX_IMAGES)
+  })
+
+  it('ignores a second submit while the first one is still running', async () => {
+    const user = userEvent.setup()
+    let release: () => void = () => undefined
+    const onUploadImage = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          release = () => resolve('diary/once.png')
+        })
+    )
+    const onAddEntry = vi.fn().mockResolvedValue(undefined)
+    render(<Harness goal={makeGoal()} onUploadImage={onUploadImage} onAddEntry={onAddEntry} />)
+    const editor = await openComposer(user)
+
+    pasteImage(editor, png('once.png'))
+    await user.type(editor, 'Один раз')
+
+    const add = screen.getByRole('button', { name: 'Добавить' })
+    // Два клика в одном act: перерисовки между ними нет, кнопка ещё не успела
+    // стать отключённой — от двойного входа защищает только флаг в ref.
+    await act(async () => {
+      add.click()
+      add.click()
+    })
+
+    expect(onUploadImage).toHaveBeenCalledTimes(1)
+    release()
+    await waitFor(() => expect(onAddEntry).toHaveBeenCalledTimes(1))
+    expect(onAddEntry).toHaveBeenCalledWith(1, expect.any(String), ['diary/once.png'])
+  })
+
+  it('frees every blob url when the form closes without saving, uploading nothing', async () => {
+    const user = userEvent.setup()
+    const onUploadImage = vi.fn()
+    render(<Harness goal={makeGoal()} defaultExpanded onUploadImage={onUploadImage} />)
+    await user.click(screen.getByRole('button', { name: 'Редактировать цель' }))
+    const editor = screen.getByLabelText('Заметка в дневник')
+
+    pasteImage(editor, png('a.png'))
+    pasteImage(editor, png('b.png'))
+    const urls = previews().map((img) => img.getAttribute('src') ?? '')
+
+    await user.click(screen.getByLabelText('Свернуть'))
+    await waitFor(() => expect(screen.queryByLabelText('Заметка в дневник')).toBeNull())
+
+    expect(onUploadImage).not.toHaveBeenCalled()
+    expect(urls).toHaveLength(2)
+    expect(urls.every((url) => savedUrls(url) === 1)).toBe(true)
+  })
+
+  it('finishes an in-flight save after the form unmounts and frees each blob url once', async () => {
+    const user = userEvent.setup()
+    let release: () => void = () => undefined
+    const onUploadImage = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          release = () => resolve('diary/late.png')
+        })
+    )
+    const onAddEntry = vi.fn().mockResolvedValue(undefined)
+    render(<Harness goal={makeGoal()} defaultExpanded onUploadImage={onUploadImage} onAddEntry={onAddEntry} />)
+    await user.click(screen.getByRole('button', { name: 'Редактировать цель' }))
+    const editor = screen.getByLabelText('Заметка в дневник')
+
+    pasteImage(editor, png('late.png'))
+    const url = previews()[0]?.getAttribute('src') ?? ''
+    await user.type(editor, 'Успеем закрыть')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+
+    await user.click(screen.getByLabelText('Свернуть'))
+    await waitFor(() => expect(screen.queryByLabelText('Заметка в дневник')).toBeNull())
+    expect(onAddEntry).not.toHaveBeenCalled()
+
+    release()
+    await waitFor(() => expect(onAddEntry).toHaveBeenCalledTimes(1))
+    expect(onAddEntry).toHaveBeenCalledWith(1, expect.any(String), ['diary/late.png'])
+    expect(savedUrls(url)).toBe(1)
   })
 
   it('offers a partial status through the popover menu', async () => {

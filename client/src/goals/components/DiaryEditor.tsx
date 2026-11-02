@@ -70,6 +70,8 @@ interface DiaryEditorProps {
   ariaLabel: string
   autofocus?: boolean
   onPasteImages?: (files: File[]) => void
+  /** Только для чтения: ввод блокируется на месте, редактор не пересоздаётся. */
+  readOnly?: boolean
 }
 
 function ToolbarButton({
@@ -105,7 +107,7 @@ function Divider() {
 
 const EMPTY_TOOLBAR = { bold: false, italic: false, underline: false, highlight: false, highlightColor: null, fontSize: null }
 
-export function DiaryEditor({ initialContent, onChange, ariaLabel, autofocus = false, onPasteImages }: DiaryEditorProps) {
+export function DiaryEditor({ initialContent, onChange, ariaLabel, autofocus = false, onPasteImages, readOnly = false }: DiaryEditorProps) {
   const pasteImages = useRef(onPasteImages)
 
   useEffect(() => {
@@ -116,6 +118,7 @@ export function DiaryEditor({ initialContent, onChange, ariaLabel, autofocus = f
     extensions: EXTENSIONS,
     content: toEditorContent(initialContent),
     autofocus,
+    editable: !readOnly,
     editorProps: {
       attributes: {
         role: 'textbox',
@@ -132,6 +135,13 @@ export function DiaryEditor({ initialContent, onChange, ariaLabel, autofocus = f
     },
     onUpdate: ({ editor }) => onChange(editor.getHTML())
   })
+
+  // Блокировка ввода переключается на месте. Второй аргумент — emitUpdate=false:
+  // без него Tiptap эмитит «update», и композер получил бы ложный onChange ровно
+  // в момент клика «Добавить» (текст сериализовался бы повторно).
+  useEffect(() => {
+    editor?.setEditable(!readOnly, false)
+  }, [editor, readOnly])
 
   const toolbar = useEditorState({
     editor,
@@ -196,7 +206,7 @@ export function DiaryEditor({ initialContent, onChange, ariaLabel, autofocus = f
 
   return (
     <div className="rounded-lg border border-slate-700/70 bg-slate-950/60 transition focus-within:border-indigo-400/70">
-      <div role="toolbar" aria-label="Форматирование" className="flex flex-wrap items-center gap-0.5 border-b border-slate-800/60 px-2 py-1.5">
+      <div role="toolbar" aria-label="Форматирование" inert={readOnly} className="flex flex-wrap items-center gap-0.5 border-b border-slate-800/60 px-2 py-1.5">
         <ToolbarButton glyph={<span className="font-bold">B</span>} label="Жирный" active={toolbar.bold} onClick={() => editor.chain().focus().toggleBold().run()} />
         <ToolbarButton glyph={<span className="italic">I</span>} label="Курсив" active={toolbar.italic} onClick={() => editor.chain().focus().toggleItalic().run()} />
         <ToolbarButton glyph={<span className="underline underline-offset-2">U</span>} label="Подчёркнутый" active={toolbar.underline} onClick={() => editor.chain().focus().toggleUnderline().run()} />

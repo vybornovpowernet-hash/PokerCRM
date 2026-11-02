@@ -16,6 +16,24 @@ if (typeof window !== 'undefined' && !window.ResizeObserver) {
 
 window.scrollTo = () => undefined
 
+// Композер дневника строит превью локальных файлов через blob-URL, а реализация vitest
+// умеет работать только с внутренними blob-объектами jsdom и падает на обычном File.
+// Поэтому заглушка всегда своя: уникальные адреса + журнал освобождений, чтобы тест
+// мог проверить, какой именно адрес и ровно ли один раз был отпущен.
+export const blobUrls = { created: [] as string[], revoked: [] as string[] }
+
+let blobSeq = 0
+
+URL.createObjectURL = (): string => {
+  const url = `blob:test-${++blobSeq}`
+  blobUrls.created.push(url)
+  return url
+}
+
+URL.revokeObjectURL = (url: string): void => {
+  blobUrls.revoked.push(url)
+}
+
 if (typeof Range !== 'undefined') {
   if (!Range.prototype.getClientRects) {
     Range.prototype.getClientRects = (() => []) as unknown as typeof Range.prototype.getClientRects

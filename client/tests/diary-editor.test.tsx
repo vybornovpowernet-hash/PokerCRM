@@ -4,6 +4,53 @@ import { describe, expect, it, vi } from 'vitest'
 import { DiaryEditor } from '../src/goals/components/DiaryEditor'
 import { sanitizeDiaryHtml } from '../src/goals/diaryHtml'
 
+describe('DiaryEditor режим только для чтения', () => {
+  it('блокирует ввод и панель, не пересоздавая редактор', () => {
+    const view = render(<DiaryEditor ariaLabel="Заметка в дневник" initialContent="<p>тело</p>" onChange={() => undefined} />)
+    const editor = screen.getByLabelText('Заметка в дневник')
+    expect(editor.getAttribute('contenteditable')).toBe('true')
+
+    view.rerender(<DiaryEditor ariaLabel="Заметка в дневник" initialContent="<p>тело</p>" onChange={() => undefined} readOnly />)
+
+    const locked = screen.getByLabelText('Заметка в дневник')
+    expect(locked).toBe(editor)
+    expect(locked.getAttribute('contenteditable')).toBe('false')
+    expect(screen.getByRole('toolbar', { name: 'Форматирование' }).hasAttribute('inert')).toBe(true)
+
+    view.rerender(<DiaryEditor ariaLabel="Заметка в дневник" initialContent="<p>тело</p>" onChange={() => undefined} />)
+    expect(screen.getByLabelText('Заметка в дневник').getAttribute('contenteditable')).toBe('true')
+    expect(screen.getByLabelText('Заметка в дневник').textContent).toBe('тело')
+    expect(screen.getByRole('toolbar', { name: 'Форматирование' }).hasAttribute('inert')).toBe(false)
+  })
+
+  it('переключение блокировки не генерирует ложный onChange', () => {
+    const onChange = vi.fn()
+    const view = render(<DiaryEditor ariaLabel="Заметка в дневник" initialContent="<p>тело</p>" onChange={onChange} />)
+    onChange.mockClear()
+
+    view.rerender(<DiaryEditor ariaLabel="Заметка в дневник" initialContent="<p>тело</p>" onChange={onChange} readOnly />)
+    view.rerender(<DiaryEditor ariaLabel="Заметка в дневник" initialContent="<p>тело</p>" onChange={onChange} />)
+
+    expect(onChange).not.toHaveBeenCalled()
+  })
+})
+
+describe('DiaryEditor отмена', () => {
+  it('контрольная: отмена в редакторе работает в тестовой среде', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<DiaryEditor ariaLabel="Заметка в дневник" initialContent="" onChange={onChange} />)
+
+    const editor = screen.getByLabelText('Заметка в дневник')
+    await user.click(editor)
+    await user.type(editor, 'абвгд')
+    expect(editor.textContent).toBe('абвгд')
+
+    await user.keyboard('{Control>}z{/Control}')
+    expect(editor.textContent).toBe('')
+  })
+})
+
 describe('DiaryEditor toolbar', () => {
   it('toggles bold formatting on a selection', async () => {
     const user = userEvent.setup()
