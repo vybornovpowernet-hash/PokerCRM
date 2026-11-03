@@ -54,3 +54,46 @@ describe('parseId', () => {
     expect(rejection(0).message).toBe('Invalid id')
   })
 })
+
+/** Последний безопасный id: его правка обязана оставить принятым. */
+const LAST_SAFE_ID = Number.MAX_SAFE_INTEGER - 1
+
+describe('parseId: типы и безопасные целые (ожидаемое поведение)', () => {
+  it('rejects a boolean instead of coercing it to 1', () => {
+    expect(rejection(true as unknown as string).status).toBe(400)
+    expect(rejection(false as unknown as string).status).toBe(400)
+  })
+
+  it('rejects a single-element array instead of coercing it to 1', () => {
+    expect(rejection(['1'] as unknown as string).status).toBe(400)
+  })
+
+  it('rejects an id string above Number.MAX_SAFE_INTEGER', () => {
+    expect(rejection('9007199254740993').status).toBe(400)
+  })
+
+  it('rejects numbers at and above Number.MAX_SAFE_INTEGER', () => {
+    expect(rejection(9007199254740993).status).toBe(400)
+    expect(rejection(9007199254740992).status).toBe(400)
+  })
+
+  it('still accepts a plain positive number from a JSON body', () => {
+    expect(parseId(5)).toBe(5)
+    expect(parseId(2147483648)).toBe(2147483648)
+  })
+
+  it('still accepts the digit strings the API actually carries', () => {
+    expect(parseId('1')).toBe(1)
+    expect(parseId('01')).toBe(1)
+    expect(parseId('2147483648')).toBe(2147483648)
+  })
+
+  it('never returns a value that is not a safe positive integer', () => {
+    const accepted: unknown[] = ['1', '01', '42', '2147483648', 5, 2147483648, LAST_SAFE_ID]
+    for (const raw of accepted) {
+      const id = parseId(raw as string)
+      expect(Number.isSafeInteger(id), String(raw)).toBe(true)
+      expect(id > 0, String(raw)).toBe(true)
+    }
+  })
+})
