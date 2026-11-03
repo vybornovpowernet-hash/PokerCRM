@@ -564,6 +564,19 @@ const MIGRATIONS: string[] = [
     UNIQUE (room_id, date)
   );
   `,
+  // v33: exact destination amount for cross-currency transfers. A room's cash
+  // desk credits the recipient at ITS OWN rate (e.g. 87.10), which differs from
+  // the parsed feed rate (87.02), so converting the sender's `amount` never
+  // matches the real credited money. `dest_amount` is what the receiving room
+  // actually got, in the receiver's `rooms.cash_currency` (min units). NULL =
+  // not specified → the receiving leg keeps deriving `amount` via the frozen
+  // day rate (legacy behaviour, kept as the fallback). No backfill: old rows
+  // stay valid in their own model. SQLite cannot add a CHECK via ALTER, so the
+  // "transfer only / positive integer" invariant is enforced in
+  // validateTransaction instead of the schema.
+  `
+  ALTER TABLE transactions ADD COLUMN dest_amount INTEGER;
+  `,
 ]
 
 let dbInstance: DatabaseSync | undefined

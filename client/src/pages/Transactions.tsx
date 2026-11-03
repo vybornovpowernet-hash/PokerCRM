@@ -13,7 +13,7 @@ import {
   type TransactionType,
   type WriteoffReason
 } from '../lib/types'
-import { formatAmount, parseUnits } from '../lib/money'
+import { formatAmount, formatUnits, parseUnits } from '../lib/money'
 import { emitBalancesChanged } from '../lib/events'
 
 const TODAY = new Date().toISOString().slice(0, 10)
@@ -27,6 +27,7 @@ interface FormState {
   direction: Direction
   counterpart: string
   destinationRoomId: number
+  destAmount: string
   comment: string
 }
 
@@ -38,6 +39,7 @@ const EMPTY_FORM: FormState = {
   direction: 'in',
   counterpart: '',
   destinationRoomId: 0,
+  destAmount: '',
   comment: ''
 }
 
@@ -70,6 +72,8 @@ export default function TransactionsPage() {
   const [writeoffBusy, setWriteoffBusy] = useState(false)
   const [writeoffError, setWriteoffError] = useState<string | null>(null)
   const [ackBusy, setAckBusy] = useState<string | null>(null)
+  const [destTouched, setDestTouched] = useState(false)
+  const [feedRate, setFeedRate] = useState<number | null>(null)
   const [filter, setFilter] = useState<{ type: TransactionType | ''; roomId: number | ''; dateFrom: string; dateTo: string }>({
     type: '',
     roomId: '',
@@ -117,6 +121,52 @@ export default function TransactionsPage() {
   const otherRooms = rooms.filter((r) => r.id !== form.roomId)
   const roomColor = (roomId: number | null) => rooms.find((r) => r.id === roomId)?.color ?? '#e2e8f0'
 
+  const destinationRoom = rooms.find((r) => r.id === form.destinationRoomId)
+  // a cross-currency transfer: the room's cash desk credits its own money, so
+  // the feed rate is only a suggestion and the exact figure is a user fact
+  const isCrossCurrency =
+    form.type === 'transfer' &&
+    !!selectedRoom &&
+    !!destinationRoom &&
+    selectedRoom.cashCurrency !== destinationRoom.cashCurrency
+
+  useEffect(() => {
+    if (!isCrossCurrency || !selectedRoom || !destinationRoom) {
+      setFeedRate(null)
+      return
+    }
+    const amount = parseUnits(form.amount)
+    if (amount === null || amount < 1) {
+      setFeedRate(null)
+      if (!destTouched) setForm((prev) => ({ ...prev, destAmount: '' }))
+      return
+    }
+    let cancelled = false
+    api.rates
+      .suggest({
+        from: selectedRoom.cashCurrency,
+        to: destinationRoom.cashCurrency,
+        date: TODAY,
+        roomId: destinationRoom.id,
+        amount
+      })
+      .then((r) => {
+        if (cancelled) return
+        setFeedRate(r.rate)
+        // prefill only while the field is untouched — the user's exact cash-desk
+        // figure always wins over the parsed market rate
+        if (!destTouched && r.suggestedAmount !== null) {
+          setForm((prev) => ({ ...prev, destAmount: formatUnits(r.suggestedAmount as number) }))
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFeedRate(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isCrossCurrency, form.roomId, form.destinationRoomId, form.amount, destTouched, selectedRoom, destinationRoom])
+
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }))
   }
@@ -130,7 +180,17 @@ export default function TransactionsPage() {
   }
 
   function pickType(type: TransactionType) {
-    setForm((prev) => ({ ...prev, type, direction: type === 'deposit' ? 'in' : 'out', fee: type === 'casino' ? '' : prev.fee }))
+    setForm((prev) => ({
+      ...prev,
+      type,
+      direction: type === 'deposit' ? 'in' : 'out',
+      fee: type === 'casino' ? '' : prev.fee,
+      destAmount: type === 'transfer' ? prev.destAmount : ''
+    }))
+    if (type !== 'transfer') {
+      setDestTouched(false)
+      setFeedRate(null)
+    }
   }
 
   function startEdit(t: Transaction) {
@@ -144,14 +204,19 @@ export default function TransactionsPage() {
       direction: t.direction,
       counterpart: t.counterpart ?? '',
       destinationRoomId: t.destinationRoomId ?? 0,
+      destAmount: t.destAmount === null ? '' : (t.destAmount / 100).toFixed(2).replace(/\.?0+$/, ''),
       comment: t.comment ?? ''
     })
+    // an already-recorded exact figure must not be overwritten by a new suggestion
+    setDestTouched(t.destAmount !== null)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   function resetForm() {
     setEditingId(null)
     setForm({ ...EMPTY_FORM, roomId: rooms[0]?.id ?? 0 })
+    setDestTouched(false)
+    setFeedRate(null)
     setError(null)
   }
 
@@ -181,6 +246,15 @@ export default function TransactionsPage() {
       return
     }
     const fee = isCasino ? 0 : parseUnits(form.fee) ?? 0
+    let destAmount: number | null = null
+    if (form.type === 'transfer' && form.destAmount.trim() !== '') {
+      const parsedDest = parseUnits(form.destAmount)
+      if (parsedDest === null || parsedDest < 1) {
+        setError('Сумма зачисления должна быть положительной (до 2 знаков после запятой)')
+        return
+      }
+      destAmount = parsedDest
+    }
     const payload: TransactionPayload = {
       roomId: form.roomId,
       type: form.type,
@@ -190,6 +264,7 @@ export default function TransactionsPage() {
       direction: form.type === 'transfer' ? 'out' : form.direction,
       counterpart: form.counterpart || null,
       destinationRoomId: form.type === 'transfer' ? form.destinationRoomId : null,
+      destAmount: form.type === 'transfer' ? destAmount : null,
       date: TODAY,
       comment: form.comment || null
     }
@@ -370,6 +445,40 @@ export default function TransactionsPage() {
             />
           </div>
         </div>
+
+        {isCrossCurrency && selectedRoom && destinationRoom && (
+          <div className="rounded-lg border border-slate-700/70 bg-slate-900/30 p-4 space-y-2">
+            <div>
+              <label className={labelCls}>
+                Зачислено в «{destinationRoom.name}», {destinationRoom.cashCurrency}
+              </label>
+              <input
+                className={inputCls}
+                value={form.destAmount}
+                onChange={(e) => {
+                  setDestTouched(true)
+                  update('destAmount', e.target.value)
+                }}
+                placeholder={formatAmount(0, destinationRoom.cashCurrency)}
+                inputMode="decimal"
+              />
+            </div>
+            <p className="text-xs text-slate-500">
+              {(() => {
+                const amount = parseUnits(form.amount)
+                const credited = parseUnits(form.destAmount)
+                const feed = feedRate === null ? null : feedRate / 10_000
+                const implied = amount && credited ? credited / amount : null
+                const parts = [
+                  feed !== null ? `Курс ленты: ${feed.toFixed(2)}` : 'Курс ленты: нет данных',
+                  implied !== null ? `Курс по вводу: ${implied.toFixed(2)}` : null
+                ].filter(Boolean)
+                return parts.join(' · ')
+              })()}
+              {feedRate !== null && ' — курс кассы рума может отличаться, впиши точную сумму'}
+            </p>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
@@ -562,6 +671,11 @@ export default function TransactionsPage() {
                       <>
                         {t.type === 'transfer' ? '⇄ ' : out ? '−' : '+'}
                         {formatAmount(t.amount, t.currency)}
+                        {t.type === 'transfer' && t.destAmount !== null && (
+                          <span className="ml-1 text-xs font-normal text-emerald-400">
+                            → +{formatAmount(t.destAmount, t.destCurrency ?? t.currency)}
+                          </span>
+                        )}
                       </>
                     )}
                   </td>

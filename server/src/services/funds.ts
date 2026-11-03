@@ -42,6 +42,10 @@ export interface Transaction {
   counterpart: string | null
   destinationRoomId: number | null
   destinationRoomName: string | null
+  /** Exact credited amount (v33), in the receiver's cash currency; null = derive from the day rate. */
+  destAmount: number | null
+  /** Cash currency of the destination room; null when there is no destination. */
+  destCurrency: string | null
   date: string
   comment: string | null
   createdAt: string
@@ -62,6 +66,7 @@ interface TxRow {
   direction: Direction
   counterpart: string | null
   destination_room_id: number | null
+  dest_amount: number | null
   date: string
   comment: string | null
   created_at: string
@@ -69,6 +74,7 @@ interface TxRow {
   writeoff_reason: WriteoffReason | null
   room_name: string
   destination_room_name: string | null
+  destination_currency: string | null
 }
 
 export interface TransactionInput {
@@ -80,6 +86,7 @@ export interface TransactionInput {
   direction?: Direction
   counterpart?: string | null
   destinationRoomId?: number | null
+  destAmount?: number | null
   date: string
   comment?: string | null
 }
@@ -112,6 +119,8 @@ function mapRow(r: TxRow): Transaction {
     counterpart: r.counterpart,
     destinationRoomId: r.destination_room_id,
     destinationRoomName: r.destination_room_name,
+    destAmount: r.dest_amount,
+    destCurrency: r.destination_room_id === null ? null : r.destination_currency,
     date: r.date,
     comment: r.comment,
     createdAt: r.created_at,
@@ -136,6 +145,7 @@ export interface ValidatedTransaction {
   currency: string
   direction: Direction
   destinationRoom: Room | null
+  destAmount: number | null
 }
 
 export function validateTransaction(input: TransactionInput): ValidatedTransaction {
@@ -151,6 +161,15 @@ export function validateTransaction(input: TransactionInput): ValidatedTransacti
   if (!Number.isInteger(fee) || fee < 0) throw new HttpError(400, 'fee: must be a non-negative integer (min units)')
   if (isCasino && fee !== 0) throw new HttpError(400, 'fee: must be 0 for casino')
   const currency = validateCurrency(input.currency, 'currency')
+  // the exact credited amount is a transfer-only fact: it is stored in the
+  // receiver's cash currency and never derived from the sender's side
+  const destAmount = input.destAmount ?? null
+  if (destAmount !== null) {
+    if (input.type !== 'transfer') throw new HttpError(400, 'destAmount: only allowed for transfers')
+    if (!Number.isInteger(destAmount) || destAmount < 1) {
+      throw new HttpError(400, 'destAmount: must be a positive integer (min units)')
+    }
+  }
   // transfers always leave the sender room: direction is derived, never read
   // from the client (the "Куда" dropdown replaces the direction picker)
   // casino is a signed result: a win credits the room (in), a loss debits it (out)
@@ -172,7 +191,7 @@ export function validateTransaction(input: TransactionInput): ValidatedTransacti
     if (input.destinationRoomId === room.id) throw new HttpError(400, 'destinationRoomId: cannot be the same as the source room')
     destinationRoom = getRoom(input.destinationRoomId as number)
   }
-  return { room, amount: input.amount, fee, currency, direction, destinationRoom }
+  return { room, amount: input.amount, fee, currency, direction, destinationRoom, destAmount }
 }
 
 function recomputeRooms(...ids: (number | null)[]): void {
@@ -194,15 +213,20 @@ interface TransactionShape {
   currency: string
   direction: Direction
   date: string
+  destAmount: number | null
+  destinationCurrency: string | null
 }
 
 /**
- * Balance effect of a transaction on each moved balance, in the transaction's
- * own currency. Sender/source: casino is a signed result, a transfer pays
+ * Balance effect of a transaction on each moved balance, in the leg's OWN
+ * currency. Sender/source: casino is a signed result, a transfer pays
  * `amount + fee`, otherwise `in` credits `amount` and `out` debits
- * `amount + fee`. A transfer's receiving room is credited `amount`.
+ * `amount + fee`. A transfer's receiving room is credited `destAmount` in the
+ * destination room's cash currency when the user recorded the exact figure;
+ * otherwise `amount` in the sender's currency (converted at the day's rate,
+ * the legacy fallback).
  */
-function legsOf(tx: TransactionShape): { roomId: number; units: number }[] {
+function legsOf(tx: TransactionShape): { roomId: number; units: number; currency: string }[] {
   const sourceUnits =
     tx.type === 'casino'
       ? tx.amount
@@ -211,11 +235,31 @@ function legsOf(tx: TransactionShape): { roomId: number; units: number }[] {
         : tx.direction === 'in'
           ? tx.amount
           : -(tx.amount + tx.fee)
-  const legs = [{ roomId: tx.roomId, units: sourceUnits }]
+  const legs = [{ roomId: tx.roomId, units: sourceUnits, currency: tx.currency }]
   if (tx.type === 'transfer' && tx.destinationRoomId != null) {
-    legs.push({ roomId: tx.destinationRoomId, units: tx.amount })
+    if (tx.destAmount !== null && tx.destinationCurrency !== null) {
+      legs.push({ roomId: tx.destinationRoomId, units: tx.destAmount, currency: tx.destinationCurrency })
+    } else {
+      legs.push({ roomId: tx.destinationRoomId, units: tx.amount, currency: tx.currency })
+    }
   }
   return legs
+}
+
+/** Maps a stored transaction onto the legs input (reversal needs its exact shape). */
+function shapeOf(t: Transaction): TransactionShape {
+  return {
+    roomId: t.roomId,
+    destinationRoomId: t.destinationRoomId,
+    type: t.type,
+    amount: t.amount,
+    fee: t.fee,
+    currency: t.currency,
+    direction: t.direction,
+    date: t.date,
+    destAmount: t.destAmount,
+    destinationCurrency: t.destCurrency
+  }
 }
 
 /**
@@ -242,7 +286,7 @@ function assertMutable(tx: Transaction): void {
  */
 function applyBalanceLegs(tx: TransactionShape, sign: 1 | -1): void {
   for (const leg of legsOf(tx)) {
-    shiftManualBalanceOnDay(leg.roomId, tx.date, sign * leg.units, tx.currency)
+    shiftManualBalanceOnDay(leg.roomId, tx.date, sign * leg.units, leg.currency)
   }
 }
 
@@ -255,10 +299,22 @@ export function createTransaction(raw: TransactionInput): Transaction {
   withTransaction(() => {
     const info = getDb()
       .prepare(
-        `INSERT INTO transactions (room_id, type, amount, fee, currency, direction, counterpart, destination_room_id, date, comment)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO transactions (room_id, type, amount, fee, currency, direction, counterpart, destination_room_id, dest_amount, date, comment)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(v.room.id, raw.type, v.amount, v.fee, v.currency, v.direction, counterpart, v.destinationRoom?.id ?? null, raw.date, comment)
+      .run(
+        v.room.id,
+        raw.type,
+        v.amount,
+        v.fee,
+        v.currency,
+        v.direction,
+        counterpart,
+        v.destinationRoom?.id ?? null,
+        v.destAmount,
+        raw.date,
+        comment
+      )
     newId = Number(info.lastInsertRowid)
     applyBalanceLegs(
       {
@@ -269,7 +325,9 @@ export function createTransaction(raw: TransactionInput): Transaction {
         fee: v.fee,
         currency: v.currency,
         direction: v.direction,
-        date: raw.date
+        date: raw.date,
+        destAmount: v.destAmount,
+        destinationCurrency: v.destinationRoom?.cashCurrency ?? null
       },
       1
     )
@@ -310,7 +368,7 @@ export function recordCasinoPnl(raw: TransactionInput, reason: WriteoffReason): 
 export function getTransaction(id: number): Transaction {
   const row = getDb()
     .prepare(
-      `SELECT t.*, r.name AS room_name, dr.name AS destination_room_name
+      `SELECT t.*, r.name AS room_name, dr.name AS destination_room_name, dr.cash_currency AS destination_currency
        FROM transactions t
        JOIN rooms r ON r.id = t.room_id
        LEFT JOIN rooms dr ON dr.id = t.destination_room_id
@@ -329,14 +387,27 @@ export function updateTransaction(id: number, raw: TransactionInput): Transactio
   const comment = validateString(raw.comment, 'comment', 500)
   withTransaction(() => {
     // reverse the old effect on its own day before rewriting the row
-    applyBalanceLegs(existing, -1)
+    applyBalanceLegs(shapeOf(existing), -1)
     getDb()
       .prepare(
         `UPDATE transactions
-         SET room_id = ?, type = ?, amount = ?, fee = ?, currency = ?, direction = ?, counterpart = ?, destination_room_id = ?, date = ?, comment = ?
+         SET room_id = ?, type = ?, amount = ?, fee = ?, currency = ?, direction = ?, counterpart = ?, destination_room_id = ?, dest_amount = ?, date = ?, comment = ?
          WHERE id = ?`
       )
-      .run(v.room.id, raw.type, v.amount, v.fee, v.currency, v.direction, counterpart, v.destinationRoom?.id ?? null, raw.date, comment, id)
+      .run(
+        v.room.id,
+        raw.type,
+        v.amount,
+        v.fee,
+        v.currency,
+        v.direction,
+        counterpart,
+        v.destinationRoom?.id ?? null,
+        v.destAmount,
+        raw.date,
+        comment,
+        id
+      )
     applyBalanceLegs(
       {
         roomId: v.room.id,
@@ -346,7 +417,9 @@ export function updateTransaction(id: number, raw: TransactionInput): Transactio
         fee: v.fee,
         currency: v.currency,
         direction: v.direction,
-        date: raw.date
+        date: raw.date,
+        destAmount: v.destAmount,
+        destinationCurrency: v.destinationRoom?.cashCurrency ?? null
       },
       1
     )
@@ -359,7 +432,7 @@ export function deleteTransaction(id: number): void {
   const tx = getTransaction(id)
   assertMutable(tx)
   withTransaction(() => {
-    applyBalanceLegs(tx, -1)
+    applyBalanceLegs(shapeOf(tx), -1)
     getDb().prepare('DELETE FROM transactions WHERE id = ?').run(id)
     recomputeRooms(tx.roomId, tx.destinationRoomId)
   })
@@ -394,7 +467,7 @@ export function listTransactions(filters: TransactionFilters = {}): Transaction[
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
   const rows = getDb()
     .prepare(
-      `SELECT t.*, r.name AS room_name, dr.name AS destination_room_name
+      `SELECT t.*, r.name AS room_name, dr.name AS destination_room_name, dr.cash_currency AS destination_currency
        FROM transactions t
        JOIN rooms r ON r.id = t.room_id
        LEFT JOIN rooms dr ON dr.id = t.destination_room_id
@@ -412,9 +485,10 @@ export function listTransactions(filters: TransactionFilters = {}): Transaction[
  * profit = delta_balance − (in − out), so these flows never affect profit.
  *
  * Transfers between own rooms produce two flow legs: the sender pays
- * `amount + fee` in its own currency, the receiver gets `amount` converted
- * into its cash currency at the day's frozen rate. Both legs cancel out of
- * profit, exactly like the balance deltas they generate.
+ * `amount + fee` in its own currency, the receiver gets its exact `dest_amount`
+ * (v33) in its cash currency, or — for legacy rows without it — `amount`
+ * converted at the day's frozen rate. Both legs cancel out of profit, exactly
+ * like the balance deltas they generate.
  */
 export function flowTotals(dateFrom: string, dateTo: string): FlowTotal[] {
   if (!isValidDayKey(dateFrom) || !isValidDayKey(dateTo)) throw new HttpError(400, 'flows: invalid date range')
@@ -440,7 +514,7 @@ export function flowTotals(dateFrom: string, dateTo: string): FlowTotal[] {
 
   const transfers = getDb()
     .prepare(
-      `SELECT t.room_id, t.amount, t.fee, t.currency, t.date, t.destination_room_id, dr.cash_currency AS dest_currency
+      `SELECT t.room_id, t.amount, t.fee, t.currency, t.date, t.destination_room_id, t.dest_amount, dr.cash_currency AS dest_currency
        FROM transactions t
        JOIN rooms dr ON dr.id = t.destination_room_id
        WHERE t.date >= ? AND t.date <= ? AND t.type = 'transfer'`
@@ -452,13 +526,20 @@ export function flowTotals(dateFrom: string, dateTo: string): FlowTotal[] {
     currency: string
     date: string
     destination_room_id: number
+    dest_amount: number | null
     dest_currency: string
   }[]
 
   for (const tr of transfers) {
     add(tr.room_id, tr.currency, 'out', tr.amount + tr.fee)
-    const converted = convertCross(tr.amount, tr.currency, tr.dest_currency, tr.date, tr.destination_room_id)
-    if (converted !== null) add(tr.destination_room_id, tr.dest_currency, 'in', converted)
+    // the exact credited amount is a fact; only legacy rows fall back to the
+    // day's feed rate (the source of the balance mismatch this feature fixes)
+    if (tr.dest_amount !== null) {
+      add(tr.destination_room_id, tr.dest_currency, 'in', tr.dest_amount)
+    } else {
+      const converted = convertCross(tr.amount, tr.currency, tr.dest_currency, tr.date, tr.destination_room_id)
+      if (converted !== null) add(tr.destination_room_id, tr.dest_currency, 'in', converted)
+    }
   }
 
   return [...totals.values()]

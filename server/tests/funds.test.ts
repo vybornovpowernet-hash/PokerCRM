@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { initDb, resetDbForTests, setDbForTests } from '../src/db.js'
 import { createRoom, deleteRoom } from '../src/services/rooms.js'
-import { getBalance } from '../src/services/balances.js'
+import { getBalance, roomFlowsUsd, upsertBalance } from '../src/services/balances.js'
 import { upsertRate } from '../src/services/rates/storage.js'
+import { convertToUsd } from '../src/services/rates/convert.js'
 import {
   createTransaction,
   deleteTransaction,
@@ -193,5 +194,91 @@ describe('transactions', () => {
   it('returns null amountUsd when no rate has ever been stored', () => {
     const t = createTransaction(tx({ type: 'deposit', amount: 100_00, currency: 'RUB', date: '2026-09-09' }))
     expect(t.amountUsd).toBeNull()
+  })
+
+  it('stores and returns the exact destAmount in the destination room currency', () => {
+    const t = createTransaction(
+      tx({ type: 'transfer', amount: 50_00, fee: 1_30, currency: 'USD', destinationRoomId: destRoomId, destAmount: 4247_59, date: '2026-09-09' })
+    )
+    expect(t.destAmount).toBe(4247_59)
+    expect(t.destCurrency).toBe('RUB')
+    const fetched = getTransaction(t.id)
+    expect(fetched.destAmount).toBe(4247_59)
+    expect(fetched.destCurrency).toBe('RUB')
+    expect(listTransactions({ type: 'transfer' })[0].destAmount).toBe(4247_59)
+  })
+
+  it('rejects destAmount outside transfers and non-positive values', () => {
+    expect(() => createTransaction(tx({ type: 'deposit', destAmount: 100 }))).toThrow(/destAmount: only allowed for transfers/)
+    expect(() => createTransaction(tx({ type: 'casino', amount: 10_00, destAmount: 100 }))).toThrow(/destAmount/)
+    expect(() => createTransaction(tx({ type: 'transfer', destinationRoomId: destRoomId, destAmount: 0 }))).toThrow(
+      /destAmount: must be a positive integer/
+    )
+    expect(() => createTransaction(tx({ type: 'transfer', destinationRoomId: destRoomId, destAmount: 10.5 }))).toThrow(
+      /destAmount: must be a positive integer/
+    )
+  })
+
+  it('credits the receiving flow leg with the exact dest_amount, not the feed rate', () => {
+    upsertRate('2026-09-09', 'USD', 'RUB', Math.round(87.02 * 10_000), 'pokerdom')
+    createTransaction(
+      tx({ type: 'transfer', amount: 50_00, fee: 1_30, currency: 'USD', destinationRoomId: destRoomId, destAmount: 4247_59, date: '2026-09-09' })
+    )
+
+    const flows = flowTotals('2026-09-09', '2026-09-09')
+    const rubLeg = flows.find((f) => f.roomId === destRoomId && f.direction === 'in')
+    expect(rubLeg?.currency).toBe('RUB')
+    expect(rubLeg?.total).toBe(4247_59) // the room's cash-desk figure, not 50.00 × 87.02
+
+    const senderOut = flows.find((f) => f.roomId === roomId && f.direction === 'out')
+    expect(senderOut?.currency).toBe('USD')
+    expect(senderOut?.total).toBe(51_30) // amount + network fee stay on the sender's side
+  })
+
+  it('shifts the destination manual balance by the exact dest_amount without conversion drift', () => {
+    upsertRate('2026-09-09', 'USD', 'RUB', Math.round(87.02 * 10_000), 'pokerdom')
+    upsertBalance(destRoomId, '2026-09-09', 1000_00, 'RUB')
+    createTransaction(
+      tx({ type: 'transfer', amount: 50_00, fee: 0, currency: 'USD', destinationRoomId: destRoomId, destAmount: 4247_59, date: '2026-09-09' })
+    )
+
+    expect(getBalance(destRoomId, '2026-09-09')?.amount).toBe(1000_00 + 4247_59)
+  })
+
+  it('reverses and reapplies the exact dest leg on update and delete', () => {
+    upsertRate('2026-09-09', 'USD', 'RUB', Math.round(87.02 * 10_000), 'pokerdom')
+    upsertBalance(destRoomId, '2026-09-09', 1000_00, 'RUB')
+    const t = createTransaction(
+      tx({ type: 'transfer', amount: 50_00, fee: 0, currency: 'USD', destinationRoomId: destRoomId, destAmount: 4247_59, date: '2026-09-09' })
+    )
+    expect(getBalance(destRoomId, '2026-09-09')?.amount).toBe(5247_59)
+
+    const updated = updateTransaction(t.id, tx({ type: 'transfer', amount: 50_00, fee: 0, currency: 'USD', destinationRoomId: destRoomId, destAmount: 4351_00, date: '2026-09-09' }))
+    expect(updated.destAmount).toBe(4351_00)
+    expect(getBalance(destRoomId, '2026-09-09')?.amount).toBe(1000_00 + 4351_00)
+
+    deleteTransaction(t.id)
+    expect(getBalance(destRoomId, '2026-09-09')?.amount).toBe(1000_00)
+  })
+
+  it('keeps the receiving room profit-neutral when the room rate differs from the feed rate', () => {
+    upsertRate('2026-09-09', 'USD', 'RUB', Math.round(87.02 * 10_000), 'pokerdom')
+    upsertRate('2026-09-10', 'USD', 'RUB', Math.round(87.02 * 10_000), 'pokerdom')
+    // yesterday's manual anchor in RUB; today the room credited 4247.59 RUB at ITS
+    // internal 87.10 while the feed says 87.02 — profit must still be zero
+    upsertBalance(destRoomId, '2026-09-09', 1000_00, 'RUB')
+    createTransaction(
+      tx({ type: 'transfer', amount: 50_00, fee: 0, currency: 'USD', destinationRoomId: destRoomId, destAmount: 4247_59, date: '2026-09-10' })
+    )
+
+    const credited = getBalance(destRoomId, '2026-09-10')
+    expect(credited?.source).toBe('auto')
+    expect(credited?.amount).toBe(1000_00 + 4247_59)
+
+    const deltaUsd = convertToUsd(4247_59, 'RUB', '2026-09-10', destRoomId)
+    expect(deltaUsd).not.toBeNull()
+    // profit = delta − (in − out): the flow leg converts the SAME credited RUB amount,
+    // so the spread between the room rate and the feed rate never leaks into profit
+    expect(roomFlowsUsd(destRoomId, '2026-09-10').inUsd).toBe(deltaUsd)
   })
 })

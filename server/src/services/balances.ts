@@ -219,10 +219,16 @@ export function flowsUsdRange(dateFrom: string, dateTo: string, roomIds?: number
 
   const incoming = db
     .prepare(
-      `SELECT destination_room_id AS room_id, date, amount, currency FROM transactions
+      `SELECT destination_room_id AS room_id, date, amount, currency, dest_amount FROM transactions
        WHERE date >= ? AND date <= ? AND type = 'transfer' AND destination_room_id IS NOT NULL${destFilter}`
     )
-    .all(...rangeParams, ...(roomIds ?? [])) as unknown as { room_id: number; date: string; amount: number; currency: string }[]
+    .all(...rangeParams, ...(roomIds ?? [])) as unknown as {
+    room_id: number
+    date: string
+    amount: number
+    currency: string
+    dest_amount: number | null
+  }[]
   for (const row of incoming) {
     const flow = bucket(row.room_id, row.date)
     const cash = cashCurrency.get(row.room_id)
@@ -230,7 +236,7 @@ export function flowsUsdRange(dateFrom: string, dateTo: string, roomIds?: number
       flow.convertible = false
       continue
     }
-    const destAmount = convertCross(row.amount, row.currency, cash, row.date, row.room_id)
+    const destAmount = row.dest_amount ?? convertCross(row.amount, row.currency, cash, row.date, row.room_id)
     if (destAmount === null) {
       flow.convertible = false
       continue
@@ -278,13 +284,17 @@ interface TxRow {
   direction: 'in' | 'out'
   type: 'deposit' | 'withdraw' | 'transfer' | 'casino'
   destination_room_id: number | null
+  dest_amount: number | null
+  destination_currency: string | null
 }
 
 /**
  * Balance effect of one transaction on a room, in `targetCurrency`, for the
- * given day. The transfer receiving leg credits `amount` (in the sender's
- * currency) with no fee; casino is a signed gaming result added verbatim; every
- * other row moves `amount` (in) or `-(amount + fee)` (out).
+ * given day. The transfer receiving leg credits the exact `dest_amount` (in
+ * the destination room's cash currency) when present, otherwise `amount` (in
+ * the sender's currency) converted by the day's rate. Casino is a signed
+ * gaming result added verbatim; every other row moves `amount` (in) or
+ * `-(amount + fee)` (out).
  */
 function transactionEffect(
   t: TxRow,
@@ -293,6 +303,9 @@ function transactionEffect(
   date: string
 ): number | null {
   const recipientLeg = t.type === 'transfer' && t.destination_room_id === roomId
+  if (recipientLeg && t.dest_amount !== null && t.destination_currency !== null) {
+    return convertCross(t.dest_amount, t.destination_currency, targetCurrency, date, roomId)
+  }
   const units = recipientLeg
     ? t.amount
     : t.type === 'casino'
@@ -370,9 +383,11 @@ export function recomputeRoomBalances(roomId: number): void {
 
     const txns = db
       .prepare(
-        `SELECT id, date, amount, fee, currency, direction, type, destination_room_id
-         FROM transactions WHERE room_id = ? OR destination_room_id = ?
-         ORDER BY date, id`
+        `SELECT t.id, t.date, t.amount, t.fee, t.currency, t.direction, t.type, t.destination_room_id, t.dest_amount, dr.cash_currency AS destination_currency
+         FROM transactions t
+         LEFT JOIN rooms dr ON dr.id = t.destination_room_id
+         WHERE t.room_id = ? OR t.destination_room_id = ?
+         ORDER BY t.date, t.id`
       )
       .all(roomId, roomId) as unknown as TxRow[]
 

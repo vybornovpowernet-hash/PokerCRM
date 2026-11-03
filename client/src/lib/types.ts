@@ -101,6 +101,10 @@ export interface Transaction {
   counterpart: string | null
   destinationRoomId: number | null
   destinationRoomName: string | null
+  /** Exact credited amount of a cross-currency transfer; null = derived from the day rate. */
+  destAmount: number | null
+  /** Cash currency of the destination room; null when there is no destination. */
+  destCurrency: string | null
   date: string
   comment: string | null
   createdAt: string

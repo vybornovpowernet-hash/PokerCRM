@@ -98,6 +98,7 @@ export interface TransactionPayload {
   direction?: 'in' | 'out'
   counterpart?: string | null
   destinationRoomId?: number | null
+  destAmount?: number | null
   date: string
   comment?: string | null
 }
@@ -243,6 +244,8 @@ export const api = {
   },
   rates: {
     status: () =>
-      request<{ usdRub: RateInfo; eurUsd: RateInfo; cnyUsd: RateInfo; stale: boolean }>('/rates/status')
+      request<{ usdRub: RateInfo; eurUsd: RateInfo; cnyUsd: RateInfo; stale: boolean }>('/rates/status'),
+    suggest: (params: { from: string; to: string; date: string; roomId?: number; amount?: number }) =>
+      request<{ rate: number | null; suggestedAmount: number | null }>(`/rates/suggest${queryString(params)}`)
   }
 }
