@@ -281,4 +281,45 @@ describe('transactions', () => {
     // so the spread between the room rate and the feed rate never leaks into profit
     expect(roomFlowsUsd(destRoomId, '2026-09-10').inUsd).toBe(deltaUsd)
   })
+
+  it('rejects an exact destAmount on a same-currency transfer', () => {
+    const sameCurrencyRoomId = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    expect(() =>
+      createTransaction(tx({ type: 'transfer', amount: 50_00, fee: 0, currency: 'USD', destinationRoomId: sameCurrencyRoomId, destAmount: 50_00 }))
+    ).toThrow(/destAmount/)
+    // the plain same-currency transfer without the exact figure stays valid
+    expect(() => createTransaction(tx({ type: 'transfer', amount: 50_00, fee: 0, currency: 'USD', destinationRoomId: sameCurrencyRoomId }))).not.toThrow()
+  })
+
+  it('rejects an exact destAmount when an update moves the transfer to a same-currency room', () => {
+    const sameCurrencyRoomId = createRoom({ name: 'GG', cashCurrency: 'USD', tournamentCurrency: 'USD' }).id
+    const t = createTransaction(
+      tx({ type: 'transfer', amount: 50_00, fee: 0, currency: 'USD', destinationRoomId: destRoomId, destAmount: 4247_59, date: '2026-09-09' })
+    )
+    expect(() =>
+      updateTransaction(t.id, tx({ type: 'transfer', amount: 50_00, fee: 0, currency: 'USD', destinationRoomId: sameCurrencyRoomId, destAmount: 4247_59, date: '2026-09-09' }))
+    ).toThrow(/destAmount/)
+    // the rejected update must not have rewritten the row or its legs
+    expect(getTransaction(t.id).destinationRoomId).toBe(destRoomId)
+    expect(getTransaction(t.id).destAmount).toBe(4247_59)
+  })
+
+  it('accepts an exact destAmount when the destination room has another cash currency', () => {
+    const t = createTransaction(
+      tx({ type: 'transfer', amount: 50_00, fee: 1_30, currency: 'USD', destinationRoomId: destRoomId, destAmount: 4247_59, date: '2026-09-09' })
+    )
+    expect(t.destAmount).toBe(4247_59)
+    expect(t.destCurrency).toBe('RUB')
+  })
+
+  it('clears dest_amount when an update moves the receiver and sends no exact figure', () => {
+    const eurRoomId = createRoom({ name: 'PokerStars', cashCurrency: 'EUR', tournamentCurrency: 'EUR' }).id
+    const t = createTransaction(
+      tx({ type: 'transfer', amount: 50_00, fee: 0, currency: 'USD', destinationRoomId: destRoomId, destAmount: 4247_59, date: '2026-09-09' })
+    )
+    const moved = updateTransaction(t.id, tx({ type: 'transfer', amount: 50_00, fee: 0, currency: 'USD', destinationRoomId: eurRoomId, destAmount: null, date: '2026-09-09' }))
+    expect(moved.destinationRoomId).toBe(eurRoomId)
+    expect(moved.destAmount).toBeNull()
+    expect(getTransaction(t.id).destAmount).toBeNull()
+  })
 })

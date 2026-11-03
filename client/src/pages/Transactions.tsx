@@ -132,7 +132,11 @@ export default function TransactionsPage() {
 
   useEffect(() => {
     if (!isCrossCurrency || !selectedRoom || !destinationRoom) {
+      // the pair stopped being cross-currency: an exact figure typed for the old
+      // pair is meaningless (and dangerous) for the new one, so it is dropped here
       setFeedRate(null)
+      setDestTouched(false)
+      setForm((prev) => (prev.destAmount === '' ? prev : { ...prev, destAmount: '' }))
       return
     }
     const amount = parseUnits(form.amount)
@@ -247,7 +251,7 @@ export default function TransactionsPage() {
     }
     const fee = isCasino ? 0 : parseUnits(form.fee) ?? 0
     let destAmount: number | null = null
-    if (form.type === 'transfer' && form.destAmount.trim() !== '') {
+    if (isCrossCurrency && form.destAmount.trim() !== '') {
       const parsedDest = parseUnits(form.destAmount)
       if (parsedDest === null || parsedDest < 1) {
         setError('Сумма зачисления должна быть положительной (до 2 знаков после запятой)')
@@ -264,7 +268,7 @@ export default function TransactionsPage() {
       direction: form.type === 'transfer' ? 'out' : form.direction,
       counterpart: form.counterpart || null,
       destinationRoomId: form.type === 'transfer' ? form.destinationRoomId : null,
-      destAmount: form.type === 'transfer' ? destAmount : null,
+      destAmount: isCrossCurrency ? destAmount : null,
       date: TODAY,
       comment: form.comment || null
     }

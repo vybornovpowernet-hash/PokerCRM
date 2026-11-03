@@ -162,3 +162,107 @@ describe('cross-currency transfer form', () => {
     expect(mocks.create).not.toHaveBeenCalled()
   })
 })
+
+const usdRoom2 = { ...usdRoom, id: 3, name: 'GG', cashCurrency: 'USD', rateSource: null }
+const rubRoom2 = { ...rubRoom, id: 4, name: 'PokerStars', cashCurrency: 'RUB', rateSource: null }
+
+async function renderRooms(list: unknown[]) {
+  mocks.roomsList.mockResolvedValue(list)
+  mocks.transactionsList.mockResolvedValue({ transactions: [], discrepancies: [] })
+  render(<TransactionsPage />)
+  await screen.findByRole('heading', { name: 'Новая операция' })
+  await waitFor(() => expect((selectAt(1) as HTMLSelectElement).value).toBe('1'))
+  return userEvent.setup()
+}
+
+async function typeExactCredited(user: ReturnType<typeof userEvent.setup>) {
+  await user.selectOptions(selectAt(0), 'transfer')
+  await user.selectOptions(selectAt(1), '1')
+  await user.selectOptions(selectAt(2), '2')
+  await user.type(screen.getByPlaceholderText('100.00'), '50')
+  const credited = (await screen.findByPlaceholderText('₽0.00')) as HTMLInputElement
+  await waitFor(() => expect(credited.value).toBe(formatUnits(435100)))
+  await user.clear(credited)
+  await user.type(credited, '4247.59')
+  await waitFor(() => expect(credited.value).toBe('4247.59'))
+  return credited
+}
+
+describe('stale exact amount after the currency pair changes', () => {
+  it('drops the exact amount when the destination switches to the sender currency', async () => {
+    const user = await renderRooms([usdRoom, rubRoom, usdRoom2])
+    await typeExactCredited(user)
+
+    await user.selectOptions(selectAt(2), '3')
+    expect(screen.queryByPlaceholderText('₽0.00')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+    await waitFor(() =>
+      expect(mocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'transfer', roomId: 1, destinationRoomId: 3, amount: 5000, destAmount: null })
+      )
+    )
+  })
+
+  it('drops the exact amount when the source switches to the receiver currency', async () => {
+    const user = await renderRooms([usdRoom, rubRoom, rubRoom2])
+    await typeExactCredited(user)
+
+    await user.selectOptions(selectAt(1), '4')
+    expect(screen.queryByPlaceholderText('₽0.00')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+    await waitFor(() =>
+      expect(mocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'transfer', roomId: 4, destinationRoomId: 2, destAmount: null })
+      )
+    )
+  })
+
+  it('drops a stored exact amount while editing a transfer moved to a same-currency pair', async () => {
+    mocks.roomsList.mockResolvedValue([usdRoom, rubRoom, usdRoom2])
+    mocks.transactionsList.mockResolvedValue({
+      transactions: [
+        {
+          id: 5,
+          roomId: 1,
+          roomName: 'Bybit',
+          type: 'transfer',
+          amount: 5000,
+          fee: 0,
+          currency: 'USD',
+          direction: 'out',
+          counterpart: null,
+          destinationRoomId: 2,
+          destinationRoomName: 'PokerDom',
+          destAmount: 424759,
+          destCurrency: 'RUB',
+          date: '2026-11-03',
+          comment: null,
+          createdAt: '2026-11-03 10:00:00',
+          amountUsd: 5000,
+          writeoff: false,
+          writeoffReason: null
+        }
+      ],
+      discrepancies: []
+    })
+    render(<TransactionsPage />)
+    await screen.findByRole('heading', { name: 'Новая операция' })
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Изменить' }))
+    const credited = (await screen.findByPlaceholderText('₽0.00')) as HTMLInputElement
+    await waitFor(() => expect(credited.value).toBe('4247.59'))
+
+    await user.selectOptions(selectAt(2), '3')
+    expect(screen.queryByPlaceholderText('₽0.00')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }))
+    await waitFor(() =>
+      expect(mocks.update).toHaveBeenCalledWith(
+        5,
+        expect.objectContaining({ roomId: 1, destinationRoomId: 3, destAmount: null })
+      )
+    )
+  })
+})

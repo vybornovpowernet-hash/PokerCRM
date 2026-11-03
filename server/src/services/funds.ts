@@ -190,6 +190,13 @@ export function validateTransaction(input: TransactionInput): ValidatedTransacti
     }
     if (input.destinationRoomId === room.id) throw new HttpError(400, 'destinationRoomId: cannot be the same as the source room')
     destinationRoom = getRoom(input.destinationRoomId as number)
+    // `dest_amount` is expressed in the receiver's cash currency: for a same-currency
+    // transfer it is either a duplicate of `amount` or — after the user changed the
+    // destination in the form — a stale figure from another currency pair, credited
+    // then in the wrong unit entirely.
+    if (destAmount !== null && currency === destinationRoom.cashCurrency) {
+      throw new HttpError(400, 'destAmount: not allowed when both rooms share the same cash currency')
+    }
   }
   return { room, amount: input.amount, fee, currency, direction, destinationRoom, destAmount }
 }
