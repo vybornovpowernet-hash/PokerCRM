@@ -50,6 +50,12 @@ export interface Transaction {
   comment: string | null
   createdAt: string
   amountUsd: number | null
+  /** `fee` in USD min units at the row's own day; 0 when there is no fee, null when no rate resolves. */
+  feeUsd: number | null
+  /** Cross-currency transfer with an exact credited amount: what the program would have credited (receiver currency). */
+  fxExpectedDest: number | null
+  /** `fxExpectedDest - destAmount` in USD; positive = loss, negative = gain, null = nothing to compare. */
+  fxDiffUsd: number | null
   /** System day-closing write-off (`recordCasinoPnl`): immutable. */
   writeoff: boolean
   /** Why the write-off was made; null for every user-entered transaction. */
@@ -107,6 +113,7 @@ export interface FlowTotal {
 }
 
 function mapRow(r: TxRow): Transaction {
+  const destCurrency = r.destination_room_id === null ? null : r.destination_currency
   return {
     id: r.id,
     roomId: r.room_id,
@@ -120,14 +127,102 @@ function mapRow(r: TxRow): Transaction {
     destinationRoomId: r.destination_room_id,
     destinationRoomName: r.destination_room_name,
     destAmount: r.dest_amount,
-    destCurrency: r.destination_room_id === null ? null : r.destination_currency,
+    destCurrency,
     date: r.date,
     comment: r.comment,
     createdAt: r.created_at,
     writeoff: r.writeoff === 1,
     writeoffReason: r.writeoff_reason,
-    amountUsd: convertToUsd(r.amount, r.currency, r.date, r.room_id)
+    amountUsd: convertToUsd(r.amount, r.currency, r.date, r.room_id),
+    feeUsd: r.fee > 0 ? convertToUsd(r.fee, r.currency, r.date, r.room_id) : 0,
+    ...transactionFx({
+      type: r.type,
+      amount: r.amount,
+      currency: r.currency,
+      date: r.date,
+      destinationRoomId: r.destination_room_id,
+      destinationCurrency: destCurrency,
+      destAmount: r.dest_amount
+    })
   }
+}
+
+/** Why a transfer contributes nothing to the rate difference; the buckets are mutually exclusive. */
+export type FxBucket = 'computed' | 'noDestAmount' | 'sameCurrency' | 'noRate'
+
+/**
+ * Classifies a transfer against the rate-difference rules in one place, so the
+ * per-row `fxDiffUsd` and the widget totals can never disagree. A same-currency
+ * transfer goes before the exact-amount check on purpose: identity conversion
+ * has nothing to compare, and reporting it as "missing exact amount" would ask
+ * the user for a number that changes nothing.
+ */
+export function transferFxBucket(t: Transaction): FxBucket {
+  if (t.type !== 'transfer') throw new HttpError(500, 'transferFxBucket: not a transfer')
+  if (t.destCurrency !== null && t.destCurrency === t.currency) return 'sameCurrency'
+  if (t.destAmount === null || t.destinationRoomId === null) return 'noDestAmount'
+  if (t.fxExpectedDest === null || t.fxDiffUsd === null) return 'noRate'
+  return 'computed'
+}
+
+/**
+ * Rate difference of one transfer, computed on the fly (no schema change): the
+ * program would have credited `convertCross(amount, …)` in the receiver's cash
+ * currency, the cash desk credited `destAmount`. Positive `fxDiffUsd` = the user
+ * received less than the program's rate promised (a loss), negative = a gain.
+ * The receiver room is passed to the converter because it is the room whose
+ * manual `rate_overrides` figure the cash desk actually applied.
+ * Both fields stay null when there is nothing to compare or no rate resolves —
+ * never a silent 0.
+ */
+export function transactionFx(args: {
+  type: TransactionType
+  amount: number
+  currency: string
+  date: string
+  destinationRoomId: number | null
+  destinationCurrency: string | null
+  destAmount: number | null
+}): { fxExpectedDest: number | null; fxDiffUsd: number | null } {
+  const none = { fxExpectedDest: null, fxDiffUsd: null }
+  if (args.type !== 'transfer' || args.destAmount === null) return none
+  if (args.destinationRoomId === null || args.destinationCurrency === null) return none
+  if (args.destinationCurrency === args.currency) return none
+  const expected = convertCross(
+    args.amount,
+    args.currency,
+    args.destinationCurrency,
+    args.date,
+    args.destinationRoomId
+  )
+  if (expected === null) return none
+  return {
+    fxExpectedDest: expected,
+    fxDiffUsd: convertToUsd(expected - args.destAmount, args.destinationCurrency, args.date, args.destinationRoomId)
+  }
+}
+
+/**
+ * Fee totals over already filtered rows (min units). Raw fee sums are kept split
+ * by currency: cents and kopecks must never be added together; only the `*Usd`
+ * fields aggregate, and a row whose fee has no rate is counted in
+ * `missingRateRows` instead of silently becoming 0.
+ */
+export function transactionsTotals(rows: Transaction[]): {
+  feeUsd: number
+  feeByCurrency: Record<string, number>
+  missingRateRows: number
+} {
+  let feeUsd = 0
+  let missingRateRows = 0
+  const feeByCurrency: Record<string, number> = {}
+  for (const t of rows) {
+    if (t.fee <= 0) continue
+    feeByCurrency[t.currency] = (feeByCurrency[t.currency] ?? 0) + t.fee
+    if (t.feeUsd === null) missingRateRows += 1
+    else feeUsd += t.feeUsd
+  }
+  return { feeUsd, feeByCurrency, missingRateRows }
 }
 
 function validateString(value: unknown, field: string, max: number): string | null {

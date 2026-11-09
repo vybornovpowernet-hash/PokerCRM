@@ -7,8 +7,10 @@ import {
   deleteTransaction,
   flowTotals,
   listTransactions,
+  transactionsTotals,
   updateTransaction
 } from '../services/funds.js'
+import { moneyOverview } from '../services/moneyOverview.js'
 import { orphanedDiscrepancies, writeoffDiscrepancy } from '../services/tournaments.js'
 import { validateWriteoffReason } from '../services/funds.js'
 import type { TransactionInput } from '../services/funds.js'
@@ -27,7 +29,13 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
       dateTo
     })
     const discrepancies = includeDiscrepancies === '1' ? orphanedDiscrepancies(dateFrom, dateTo, roomId) : []
-    return { transactions, discrepancies }
+    // `totals` is computed from exactly the rows above: «Комиссии по фильтру» on
+    // the page must never disagree with the list it sits under.
+    return { transactions, discrepancies, totals: transactionsTotals(transactions) }
+  })
+
+  app.get<{ Querystring: { dateFrom?: string; dateTo?: string } }>('/api/transactions/overview', async (req) => {
+    return moneyOverview(req.query.dateFrom, req.query.dateTo)
   })
 
   app.get<{ Querystring: { dateFrom?: string; dateTo?: string } }>('/api/transactions/flows', async (req) => {
