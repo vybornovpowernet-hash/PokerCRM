@@ -580,6 +580,8 @@ const MIGRATIONS: string[] = [
 ]
 
 let dbInstance: DatabaseSync | undefined
+/** Ставится только closeDb(): после планового закрытия getDb() обязан отказаться. */
+let dbClosed = false
 
 /** Каталог снимков лежит рядом с файлом базы: в бою это `data/premigration`. */
 const SNAPSHOT_DIR_NAME = 'premigration'
@@ -698,7 +700,15 @@ export function initDb(path: string): DatabaseSync {
     mkdirSync(dirname(path), { recursive: true })
   }
   const db = new DatabaseSync(path)
-  db.exec('PRAGMA journal_mode = WAL')
+  const journal = db.prepare('PRAGMA journal_mode = WAL').get() as Record<string, unknown> | undefined
+  const journalMode = journal ? String(Object.values(journal)[0] ?? '') : ''
+  if (shouldWarnJournalMode(path, journalMode)) {
+    console.warn(
+      `[db] журнал базы не переключён в WAL (файл ${path}, режим "${journalMode || 'неизвестен'}"). ` +
+        `Одновременное чтение снимков и запись возможны и в другом режиме, но устойчивость к сбою ниже: ` +
+        `проверьте, что каталог поддерживает блокировки и доступен на запись.`
+    )
+  }
   db.exec('PRAGMA synchronous = NORMAL')
   db.exec('PRAGMA foreign_keys = ON')
   db.exec('PRAGMA busy_timeout = 5000')
@@ -790,23 +800,61 @@ export function withTransaction<T>(fn: () => T): T {
   }
 }
 
+export type DbOpenDecision = 'instance' | 'refuse-closed' | 'refuse-test' | 'open-live'
+
+export const DB_CLOSED_MESSAGE = 'База данных закрыта: повторное открытие через getDb() запрещено'
+export const DB_TEST_PROCESS_MESSAGE = 'Тестовый процесс: getDb() без setDbForTests() открыл бы боевую базу'
+
+/**
+ * The whole `getDb()` policy as a table, so it can be tested without a database.
+ * Order is load-bearing: a live instance always wins, then "we were closed on
+ * purpose" (otherwise a shutdown race would reopen the file), then the test
+ * process must never touch the real file.
+ */
+export function decideDbOpen(state: { hasInstance: boolean; closed: boolean; testProcess: boolean }): DbOpenDecision {
+  if (state.hasInstance) return 'instance'
+  if (state.closed) return 'refuse-closed'
+  if (state.testProcess) return 'refuse-test'
+  return 'open-live'
+}
+
+/** True when a file database ended up in a non-WAL journal mode (`:memory:` never warns). */
+export function shouldWarnJournalMode(path: string, mode: string): boolean {
+  if (path === ':memory:') return false
+  return mode.trim().toLowerCase() !== 'wal'
+}
+
 export function getDb(): DatabaseSync {
-  if (!dbInstance) {
-    dbInstance = initDb(join(projectRoot, 'data', 'poker-crm.sqlite'))
+  const current = dbInstance
+  const decision = decideDbOpen({
+    hasInstance: current !== undefined,
+    closed: dbClosed,
+    testProcess: process.env.VITEST === 'true'
+  })
+  if (decision === 'refuse-closed') throw new Error(DB_CLOSED_MESSAGE)
+  if (decision === 'refuse-test') throw new Error(DB_TEST_PROCESS_MESSAGE)
+  if (decision === 'open-live') {
+    const opened = initDb(join(projectRoot, 'data', 'poker-crm.sqlite'))
+    dbInstance = opened
+    return opened
   }
-  return dbInstance
+  if (!current) throw new Error('БД: getDb() не смог определить состояние открытия')
+  return current
 }
 
 export function setDbForTests(db: DatabaseSync): void {
   dbInstance = db
+  dbClosed = false
 }
 
 export function resetDbForTests(): void {
   dbInstance = undefined
+  dbClosed = false
 }
 
 export function closeDb(): void {
   const db = dbInstance
+  dbClosed = true
   if (!db) return
   dbInstance = undefined
   transactionDepth = 0
