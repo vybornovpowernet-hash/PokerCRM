@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -581,9 +581,104 @@ const MIGRATIONS: string[] = [
 
 let dbInstance: DatabaseSync | undefined
 
+/** Каталог снимков лежит рядом с файлом базы: в бою это `data/premigration`. */
+const SNAPSHOT_DIR_NAME = 'premigration'
+/** Строгий шаблон собственного имени: чистка удаляет только полностью совпавшие файлы. */
+const SNAPSHOT_RE = /^premigration-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-v\d{4}(?:-\d+)?\.sqlite$/
+/** Сколько последних снимков держать. */
+const SNAPSHOT_KEEP = 3
+
+function readUserVersion(db: DatabaseSync): number {
+  const row = db.prepare('PRAGMA user_version').get() as { user_version: number } | undefined
+  return row?.user_version ?? 0
+}
+
+/** `2026-11-07T07-23-22-193Z`: двоеточия и точки заменены на дефисы. */
+function snapshotStamp(now: Date = new Date()): string {
+  return now.toISOString().replace(/[:.]/g, '-')
+}
+
+function snapshotName(stamp: string, version: number, counter: number): string {
+  const suffix = counter > 1 ? `-${counter}` : ''
+  return `${SNAPSHOT_DIR_NAME}-${stamp}-v${String(version).padStart(4, '0')}${suffix}.sqlite`
+}
+
+/**
+ * A safety copy taken BEFORE any pending migration runs, so a migration that
+ * succeeds technically but is wrong in meaning can still be undone. `VACUUM INTO`
+ * is used (not a file copy) because the app is already in WAL mode here: a plain
+ * copy could miss the committed rows still sitting in `-wal`. Only a file database
+ * with pending migrations is snapshotted — a fresh install (`user_version = 0`)
+ * and `:memory:` are skipped, and there is nothing to copy for an up-to-date base.
+ */
+function snapshotBeforeMigrations(db: DatabaseSync, path: string): void {
+  const version = readUserVersion(db)
+  if (version <= 0 || version >= MIGRATIONS.length) return
+
+  const dir = join(dirname(path), SNAPSHOT_DIR_NAME)
+  try {
+    mkdirSync(dir, { recursive: true })
+    const stamp = snapshotStamp()
+    let counter = 1
+    let target = join(dir, snapshotName(stamp, version, counter))
+    while (existsSync(target)) {
+      counter += 1
+      target = join(dir, snapshotName(stamp, version, counter))
+    }
+    db.prepare('VACUUM INTO ?').run(target)
+    if (!existsSync(target) || statSync(target).size === 0) {
+      throw new Error(`файл снимка не создан (${target})`)
+    }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    throw new Error(
+      `Не удалось сделать снимок базы данных перед миграциями: ${path}. ` +
+        `Причина: ${reason}. ` +
+        `Освободите место на диске и проверьте права на запись в каталог ${dir}, ` +
+        `либо сделайте резервную копию вручную (npm run backup). ` +
+        `Миграции не выполнялись, база не изменена.`,
+      { cause: err }
+    )
+  }
+
+  try {
+    pruneSnapshots(dir)
+  } catch (err) {
+    // the snapshot itself is on disk: a failed cleanup must not stop the start
+    console.warn(`[db] не удалось почистить старые снимки в ${dir}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+/** Keeps the three newest own files of the directory; foreign entries stay untouched. */
+function pruneSnapshots(dir: string): void {
+  const own = readdirSync(dir, { withFileTypes: true }).filter(
+    (entry) => entry.isFile() && SNAPSHOT_RE.test(entry.name)
+  )
+  if (own.length <= SNAPSHOT_KEEP) return
+  const ordered = own
+    .map((entry) => ({ name: entry.name, time: snapshotTime(entry.name) }))
+    .sort((a, b) => b.time - a.time || (a.name < b.name ? -1 : 1))
+  for (const stale of ordered.slice(SNAPSHOT_KEEP)) {
+    unlinkSync(join(dir, stale.name))
+  }
+}
+
+/** Milliseconds from the timestamp embedded in the snapshot name (its real order). */
+function snapshotTime(name: string): number {
+  const match = name.match(/^premigration-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/)
+  if (!match) return 0
+  const [y, month, d, h, mi, s, ms] = match.slice(1).map(Number)
+  return Date.UTC(y ?? 0, (month ?? 1) - 1, d ?? 1, h ?? 0, mi ?? 0, s ?? 0, ms ?? 0)
+}
+
 export function runMigrations(db: DatabaseSync): void {
-  const cur = db.prepare('PRAGMA user_version').get() as { user_version: number } | undefined
-  const version = cur?.user_version ?? 0
+  const version = readUserVersion(db)
+  if (version > MIGRATIONS.length) {
+    throw new Error(
+      `База данных создана более новой версией программы (версия базы ${version}, программа знает ${MIGRATIONS.length}). ` +
+        `Обновите программу. Данные не изменены.`
+    )
+  }
   for (let v = version; v < MIGRATIONS.length; v++) {
     db.exec('BEGIN')
     try {
@@ -598,7 +693,8 @@ export function runMigrations(db: DatabaseSync): void {
 }
 
 export function initDb(path: string): DatabaseSync {
-  if (path !== ':memory:') {
+  const fileDb = path !== ':memory:'
+  if (fileDb) {
     mkdirSync(dirname(path), { recursive: true })
   }
   const db = new DatabaseSync(path)
@@ -606,7 +702,19 @@ export function initDb(path: string): DatabaseSync {
   db.exec('PRAGMA synchronous = NORMAL')
   db.exec('PRAGMA foreign_keys = ON')
   db.exec('PRAGMA busy_timeout = 5000')
-  runMigrations(db)
+  if (fileDb) {
+    try {
+      snapshotBeforeMigrations(db, path)
+      runMigrations(db)
+    } catch (err) {
+      // nothing may be migrated behind a failed snapshot; and a handle left open
+      // would lock the file (Windows), including for the very next retry
+      db.close()
+      throw err
+    }
+  } else {
+    runMigrations(db)
+  }
   return db
 }
 
