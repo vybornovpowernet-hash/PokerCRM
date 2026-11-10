@@ -149,6 +149,74 @@ describe('виджет: курсовая разница переводов', () 
   })
 })
 
+describe('виджет: «Комиссии» = комиссии плюс курсовая разница', () => {
+  it('costs складывает сервер: комиссии плюс чистая потеря на курсе, выигрыш уменьшает сумму', async () => {
+    const body = (await overview(D, D)).json()
+    expect(body.costs).toEqual({
+      totalUsd: 674, // 411 комиссий + 263 чистой курсовой разницы
+      feesUsd: 411,
+      fxNetLossUsd: 263,
+      fxLossesUsd: 265,
+      fxGainsUsd: 2,
+      missingRateRows: 1,
+      fxNotCountedTransfers: 2
+    })
+    expect(body.costs.totalUsd).toBe(body.costs.feesUsd + body.costs.fxNetLossUsd)
+    expect(body.costs.feesUsd).toBe(body.fees.totalUsd)
+    expect(body.costs.fxNetLossUsd).toBe(body.fx.netLossUsd)
+    expect(body.costs.fxLossesUsd).toBe(body.fx.lossesUsd)
+    expect(body.costs.fxGainsUsd).toBe(body.fx.gainsUsd)
+    expect(body.costs.missingRateRows).toBe(body.fees.missingRateRows)
+  })
+
+  it('списания казино с причиной fx в «Комиссии» не входят', async () => {
+    const body = (await overview(D, D)).json()
+    // в датасете два авто-списания с причиной fx: -10.00 и +0.16 = -984
+    expect(body.casino.byReason.fx).toEqual({ usd: -984, count: 2 })
+    expect(body.costs.totalUsd).toBe(674)
+    expect(body.costs.totalUsd).not.toBe(674 - 984)
+    expect(body.costs.feesUsd + body.costs.fxNetLossUsd).toBe(body.costs.totalUsd)
+  })
+
+  it('fxNotCountedTransfers считает только кросс-валютные переводы без посчитанной разницы', async () => {
+    const body = (await overview(D, D)).json()
+    // исключены: 1 без точной суммы (PokerDom->Bybit) + 1 без курса (GG->Wina) = 2;
+    // два перевода между румами одной валюты (GG->Bybit) не считаются: сравнивать нечего
+    expect(body.fx.excluded).toEqual({ noDestAmount: 1, sameCurrency: 2, noRate: 1 })
+    expect(body.costs.fxNotCountedTransfers).toBe(body.fx.excluded.noDestAmount + body.fx.excluded.noRate)
+  })
+
+  it('инвариант: сумма costsUsd по румам равна costs.totalUsd', async () => {
+    const body = (await overview(D, D)).json()
+    const sum = body.rooms.reduce((acc: number, r: { costsUsd: number }) => acc + r.costsUsd, 0)
+    expect(sum).toBe(body.costs.totalUsd)
+    const room = (id: number) => body.rooms.find((r: { roomId: number }) => r.roomId === id)
+    expect(room(bybit).costsUsd).toBe(room(bybit).feesUsd + room(bybit).fxUsd)
+    expect(room(bybit).costsUsd).toBe(410 + 265)
+    expect(room(pokerdom).costsUsd).toBe(1 + -2) // выигрыш на курсе уменьшает стоимость рума
+    expect(room(wina).costsUsd).toBe(0) // его комиссия без курса не превратилась в ноль молча
+    expect(room(gg).costsUsd).toBe(0)
+  })
+
+  it('маршруты переводов несут курсовую разницу и свою стоимость', async () => {
+    const body = (await overview(D, D)).json()
+    const route = (from: number, to: number) =>
+      body.routes.find((r: { fromRoomId: number; toRoomId: number }) => r.fromRoomId === from && r.toRoomId === to)
+    expect(route(bybit, pokerdom)).toMatchObject({ feeUsd: 130, fxUsd: -2, costsUsd: 128 })
+    expect(route(redstar, bybit)).toMatchObject({ feeUsd: 0, fxUsd: 265, costsUsd: 265 })
+    // маршрут без курса: разница не посчитана, поэтому стоимость — только известные комиссии
+    expect(route(gg, wina)).toMatchObject({ feeUsd: 0, fxUsd: 0, costsUsd: 0 })
+    for (const r of body.routes) expect(r.costsUsd).toBe(r.feeUsd + r.fxUsd)
+  })
+
+  it('ручной курс рума меняет и общую стоимость', async () => {
+    setRateOverride(pokerdom, 'USD', 'RUB', 900_000)
+    const body = (await overview(D, D)).json()
+    expect(body.costs.fxNetLossUsd).toBe(421)
+    expect(body.costs.totalUsd).toBe(411 + 421)
+  })
+})
+
 describe('виджет: разбивка по румам и маршруты переводов', () => {
   it('отдаёт таблицу по румам в USD', async () => {
     const body = (await overview(D, D)).json()
@@ -190,6 +258,15 @@ describe('виджет: период, пусто и валидация', () => {
     expect(body.fees.byRoom).toEqual([])
     expect(body.casino.totalUsd).toBe(0)
     expect(body.fx).toMatchObject({ lossesUsd: 0, gainsUsd: 0, netLossUsd: 0, rows: 0, excluded: { noDestAmount: 0, sameCurrency: 0, noRate: 0 } })
+    expect(body.costs).toEqual({
+      totalUsd: 0,
+      feesUsd: 0,
+      fxNetLossUsd: 0,
+      fxLossesUsd: 0,
+      fxGainsUsd: 0,
+      missingRateRows: 0,
+      fxNotCountedTransfers: 0
+    })
     expect(body.rooms).toEqual([])
     expect(body.routes).toEqual([])
   })

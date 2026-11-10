@@ -56,6 +56,12 @@ export interface Transaction {
   fxExpectedDest: number | null
   /** `fxExpectedDest - destAmount` in USD; positive = loss, negative = gain, null = nothing to compare. */
   fxDiffUsd: number | null
+  /**
+   * Combined cost of the row: fee plus rate difference, both in USD min units.
+   * A row without a rate difference contributes its fee only; a row whose fee has
+   * no rate is null (never a silent 0), exactly like `feeUsd`.
+   */
+  costUsd: number | null
   /** System day-closing write-off (`recordCasinoPnl`): immutable. */
   writeoff: boolean
   /** Why the write-off was made; null for every user-entered transaction. */
@@ -114,6 +120,16 @@ export interface FlowTotal {
 
 function mapRow(r: TxRow): Transaction {
   const destCurrency = r.destination_room_id === null ? null : r.destination_currency
+  const feeUsd = r.fee > 0 ? convertToUsd(r.fee, r.currency, r.date, r.room_id) : 0
+  const fx = transactionFx({
+    type: r.type,
+    amount: r.amount,
+    currency: r.currency,
+    date: r.date,
+    destinationRoomId: r.destination_room_id,
+    destinationCurrency: destCurrency,
+    destAmount: r.dest_amount
+  })
   return {
     id: r.id,
     roomId: r.room_id,
@@ -134,17 +150,20 @@ function mapRow(r: TxRow): Transaction {
     writeoff: r.writeoff === 1,
     writeoffReason: r.writeoff_reason,
     amountUsd: convertToUsd(r.amount, r.currency, r.date, r.room_id),
-    feeUsd: r.fee > 0 ? convertToUsd(r.fee, r.currency, r.date, r.room_id) : 0,
-    ...transactionFx({
-      type: r.type,
-      amount: r.amount,
-      currency: r.currency,
-      date: r.date,
-      destinationRoomId: r.destination_room_id,
-      destinationCurrency: destCurrency,
-      destAmount: r.dest_amount
-    })
+    feeUsd,
+    ...fx,
+    costUsd: rowCostUsd(feeUsd, fx.fxDiffUsd)
   }
+}
+
+/**
+ * One row of «Комиссии»: the fee the room kept plus what the rate spread cost on
+ * this very transfer. A missing rate difference (nothing to compare) adds nothing;
+ * a missing fee rate stays null so the UI never reads it as «no cost».
+ */
+function rowCostUsd(feeUsd: number | null, fxDiffUsd: number | null): number | null {
+  if (feeUsd === null) return null
+  return feeUsd + (fxDiffUsd ?? 0)
 }
 
 /** Why a transfer contributes nothing to the rate difference; the buckets are mutually exclusive. */
@@ -231,6 +250,9 @@ export function transactionsTotals(
   flowCountedRows: number
   flowMissingRateRows: number
   transfers: { count: number; feeUsd: number }
+  fxNetLossUsd: number
+  costUsd: number
+  fxNotCountedTransfers: number
 } {
   let feeUsd = 0
   let missingRateRows = 0
@@ -240,6 +262,8 @@ export function transactionsTotals(
   let flowMissingRateRows = 0
   let transferCount = 0
   let transfersFeeUsd = 0
+  let fxNetLossUsd = 0
+  let fxNotCountedTransfers = 0
 
   for (const t of rows) {
     if (t.fee > 0) {
@@ -252,6 +276,11 @@ export function transactionsTotals(
     }
     if (t.type === 'transfer') {
       transferCount += 1
+      if (t.fxDiffUsd !== null) fxNetLossUsd += t.fxDiffUsd
+      // same-currency transfers are not a missed computation: identity conversion
+      // has no spread, so only cross-currency rows without a number count here
+      else if (transferFxBucket(t) !== 'sameCurrency') fxNotCountedTransfers += 1
+      // перевод не внешний поток: в сумму «зашло/ушло» он не входит никогда
       continue
     }
     if (t.amountUsd === null) {
@@ -273,7 +302,11 @@ export function transactionsTotals(
     flowScope,
     flowCountedRows: flowScope === 'none' ? 0 : flowCountedRows,
     flowMissingRateRows: flowScope === 'none' ? 0 : flowMissingRateRows,
-    transfers: { count: transferCount, feeUsd: transfersFeeUsd }
+    transfers: { count: transferCount, feeUsd: transfersFeeUsd },
+    // «Комиссии»: fee plus the rate difference of the same rows, in every mode
+    fxNetLossUsd,
+    costUsd: feeUsd + fxNetLossUsd,
+    fxNotCountedTransfers
   }
 }
 

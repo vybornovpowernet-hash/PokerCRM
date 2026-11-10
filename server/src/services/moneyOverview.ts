@@ -99,6 +99,8 @@ export interface OverviewRoom {
   casinoUsd: number
   /** Rate difference attributed to the RECEIVING room: the spread is paid where the money landed. */
   fxUsd: number
+  /** Combined cost of this room: `feesUsd + fxUsd`. Summed over rooms it equals `costs.totalUsd`. */
+  costsUsd: number
   transfersOut: number
   transfersIn: number
 }
@@ -110,8 +112,29 @@ export interface OverviewRoute {
   toRoomName: string
   count: number
   feeUsd: number
+  /** Sum of `fxDiffUsd` of the route's transfers where the difference could be computed; 0 where it could not. */
+  fxUsd: number
+  /** Combined cost of this route: `feeUsd + fxUsd`. */
+  costsUsd: number
   /** Raw min units per fee currency, including routes that paid no fee. */
   feeByCurrency: Record<string, number>
+}
+
+/**
+ * «Комиссии» как одна сущность: сколько рум взял с пользователя — и явную комиссию,
+ * и курсовой спред на зачислении перевода. Выигрыш на курсе (отрицательная разница)
+ * уменьшает сумму. Списания `casino` с причиной `fx` сюда НЕ входят: это остаток дня,
+ * а не удержанный румом процент, и он живёт в блоке `casino`.
+ */
+export interface OverviewCosts {
+  totalUsd: number
+  feesUsd: number
+  fxNetLossUsd: number
+  fxLossesUsd: number
+  fxGainsUsd: number
+  missingRateRows: number
+  /** Кросс-валютные переводы, где курсовую разницу посчитать нельзя: нет точной суммы либо нет курса. */
+  fxNotCountedTransfers: number
 }
 
 export interface MoneyOverview {
@@ -120,6 +143,7 @@ export interface MoneyOverview {
   fees: OverviewFees
   casino: OverviewCasino
   fx: OverviewFx
+  costs: OverviewCosts
   rooms: OverviewRoom[]
   routes: OverviewRoute[]
 }
@@ -195,6 +219,7 @@ function buildOverview(period: OverviewPeriod): MoneyOverview {
       feesUsd: 0,
       casinoUsd: 0,
       fxUsd: 0,
+      costsUsd: 0,
       transfersOut: 0,
       transfersIn: 0
     }
@@ -271,6 +296,8 @@ function buildOverview(period: OverviewPeriod): MoneyOverview {
       toRoomName: t.destinationRoomName ?? '—',
       count: 0,
       feeUsd: 0,
+      fxUsd: 0,
+      costsUsd: 0,
       feeByCurrency: {}
     }
     route.count += 1
@@ -293,6 +320,8 @@ function buildOverview(period: OverviewPeriod): MoneyOverview {
     fx.netLossUsd += t.fxDiffUsd
     if (t.fxDiffUsd > 0) fx.lossesUsd += t.fxDiffUsd
     else if (t.fxDiffUsd < 0) fx.gainsUsd += -t.fxDiffUsd
+    // The spread belongs to the route that carried the money, too.
+    route.fxUsd += t.fxDiffUsd
     // The spread is paid where the money landed, so the receiver owns the number.
     room(t.destinationRoomId, t.destinationRoomName ?? '—').fxUsd += t.fxDiffUsd
   }
@@ -304,16 +333,37 @@ function buildOverview(period: OverviewPeriod): MoneyOverview {
 
   cash.netInUsd = cash.depositedUsd - cash.withdrawnUsd
 
+  // «Комиссии» как одна сущность: явная комиссия рума плюс курсовой спред на зачислении.
+  // Выигрыш на курсе (отрицательная разница) вычитается; `casino`-списания с причиной `fx`
+  // здесь отсутствуют намеренно — они остаток дня, а не удержанный румом процент.
+  const costs: OverviewCosts = {
+    totalUsd: fees.totalUsd + fx.netLossUsd,
+    feesUsd: fees.totalUsd,
+    fxNetLossUsd: fx.netLossUsd,
+    fxLossesUsd: fx.lossesUsd,
+    fxGainsUsd: fx.gainsUsd,
+    missingRateRows: fees.missingRateRows,
+    // переводы «между румами одной валюты» не считаются потерянной разницей: там сравнивать нечего
+    fxNotCountedTransfers: fx.excluded.noDestAmount + fx.excluded.noRate
+  }
+
+  const rooms = [...roomById.values()]
+    .map((r) => ({ ...r, costsUsd: r.feesUsd + r.fxUsd }))
+    .sort((a, b) => nameCollator.compare(a.name, b.name))
+
   return {
     period,
     cash,
     fees: { ...fees, byRoom: byRoomOrder(feeRoomById) },
     casino,
     fx,
-    rooms: [...roomById.values()].sort((a, b) => nameCollator.compare(a.name, b.name)),
-    routes: [...routeByKey.values()].sort(
-      (a, b) => b.count - a.count || nameCollator.compare(a.fromRoomName, b.fromRoomName) || nameCollator.compare(a.toRoomName, b.toRoomName)
-    )
+    costs,
+    rooms,
+    routes: [...routeByKey.values()]
+      .map((r) => ({ ...r, costsUsd: r.feeUsd + r.fxUsd }))
+      .sort(
+        (a, b) => b.count - a.count || nameCollator.compare(a.fromRoomName, b.fromRoomName) || nameCollator.compare(a.toRoomName, b.toRoomName)
+      )
   }
 }
 

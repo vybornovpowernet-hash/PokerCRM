@@ -125,6 +125,91 @@ describe('totals: фильтр по типу', () => {
   })
 })
 
+describe('totals: «Комиссии» = комиссии плюс курсовая разница', () => {
+  it('без фильтров: fxNetLossUsd, costUsd и счётчик непосчитанных переводов', async () => {
+    const body = await list(`?dateFrom=${D}&dateTo=${D}`)
+    // Bybit->PokerDom: выгода 2 цента; RedStar->Bybit: потеря 265; итого 263
+    expect(body.totals.fxNetLossUsd).toBe(263)
+    expect(body.totals.costUsd).toBe(410 + 263)
+    expect(body.totals.costUsd).toBe(body.totals.feeUsd + body.totals.fxNetLossUsd)
+    // три перевода: два посчитаны, один между румами одной валюты — не «непосчитанный», а нечего считать
+    expect(body.totals.fxNotCountedTransfers).toBe(0)
+    expect(body.totals.transfers.count).toBe(3)
+  })
+
+  it('фильтр type=deposit: курсовой разницы нет, costUsd равен feeUsd', async () => {
+    const body = await list(`?dateFrom=${D}&dateTo=${D}&type=deposit`)
+    expect(body.totals.fxNetLossUsd).toBe(0)
+    expect(body.totals.feeUsd).toBe(150)
+    expect(body.totals.costUsd).toBe(150)
+    expect(body.totals.fxNotCountedTransfers).toBe(0)
+  })
+
+  it('фильтр type=withdraw и type=casino: costUsd равен feeUsd', async () => {
+    const withdraw = await list(`?dateFrom=${D}&dateTo=${D}&type=withdraw`)
+    expect(withdraw.totals.costUsd).toBe(withdraw.totals.feeUsd)
+    expect(withdraw.totals.fxNetLossUsd).toBe(0)
+    const casino = await list(`?dateFrom=${D}&dateTo=${D}&type=casino`)
+    expect(casino.totals.costUsd).toBe(0)
+    expect(casino.totals.fxNetLossUsd).toBe(0)
+    expect(casino.totals.fxNotCountedTransfers).toBe(0)
+  })
+
+  it('фильтр type=transfer: стоимость = комиссии переводов плюс их курсовая разница', async () => {
+    const body = await list(`?dateFrom=${D}&dateTo=${D}&type=transfer`)
+    expect(body.totals.feeUsd).toBe(130)
+    expect(body.totals.fxNetLossUsd).toBe(263)
+    expect(body.totals.costUsd).toBe(393)
+    expect(body.totals.transfers).toEqual({ count: 3, feeUsd: 130 })
+  })
+
+  it('фильтр по руму: стоимость рума включает и его комиссии, и его курсовую разницу', async () => {
+    const bybitOnly = await list(`?dateFrom=${D}&dateTo=${D}&roomId=${bybit}`)
+    expect(bybitOnly.totals.feeUsd).toBe(410)
+    expect(bybitOnly.totals.fxNetLossUsd).toBe(-2) // его перевод зачислили на 2 цента больше курса
+    expect(bybitOnly.totals.costUsd).toBe(408)
+    // рум без комиссий вообще: стоимость целиком из курсовой разницы его перевода
+    const redstarOnly = await list(`?dateFrom=${D}&dateTo=${D}&roomId=${redstar}`)
+    expect(redstarOnly.totals.feeUsd).toBe(0)
+    expect(redstarOnly.totals.fxNetLossUsd).toBe(265)
+    expect(redstarOnly.totals.costUsd).toBe(265)
+  })
+
+  it('дата вне диапазона не добавляет ни комиссий, ни курсовой разницы', async () => {
+    const one = await list(`?dateFrom=${D}&dateTo=${D}`)
+    const both = await list(`?dateFrom=${PREV}&dateTo=${D}`)
+    expect(both.totals.costUsd).toBe(one.totals.costUsd)
+    expect(both.totals.fxNetLossUsd).toBe(one.totals.fxNetLossUsd)
+    expect(both.totals.fxNotCountedTransfers).toBe(one.totals.fxNotCountedTransfers)
+  })
+
+  it('costUsd строки: известные части суммы, null если у комиссии нет курса', async () => {
+    const body = await list(`?dateFrom=${D}&dateTo=${D}`)
+    const rows = body.transactions as Array<{ id: number; type: string; roomId: number; destinationRoomId: number | null; feeUsd: number | null; fxDiffUsd: number | null; costUsd: number | null }>
+    const by = (id: number) => rows.find((t) => t.id === id)!
+    const rubTransfer = rows.find((t) => t.type === 'transfer' && t.destinationRoomId === pokerdom)!
+    const eurTransfer = rows.find((t) => t.type === 'transfer' && t.roomId === redstar)!
+    const sameCurrency = rows.find((t) => t.type === 'transfer' && t.roomId === gg && t.destinationRoomId === bybit)!
+    const deposit = rows.find((t) => t.type === 'deposit' && t.roomId === bybit)!
+    const casino = rows.find((t) => t.type === 'casino' && !t.writeoff)!
+    expect(by(rubTransfer.id)).toMatchObject({ feeUsd: 130, fxDiffUsd: -2, costUsd: 128 })
+    expect(by(eurTransfer.id)).toMatchObject({ feeUsd: 0, fxDiffUsd: 265, costUsd: 265 })
+    expect(by(sameCurrency.id)).toMatchObject({ feeUsd: 0, fxDiffUsd: null, costUsd: 0 })
+    expect(by(deposit.id)).toMatchObject({ feeUsd: 150, fxDiffUsd: null, costUsd: 150 })
+    expect(by(casino.id)).toMatchObject({ feeUsd: 0, costUsd: 0 })
+    for (const t of rows) {
+      if (t.feeUsd === null) expect(t.costUsd, `строка ${t.id}`).toBeNull()
+      else expect(t.costUsd, `строка ${t.id}`).toBe(t.feeUsd + (t.fxDiffUsd ?? 0))
+    }
+  })
+
+  it('паритет: totals.costUsd списка равна overview.costs.totalUsd за тот же период', async () => {
+    const body = await list(`?dateFrom=${D}&dateTo=${D}`)
+    const view = await app.inject({ method: 'GET', url: `/api/transactions/overview?dateFrom=${D}&dateTo=${D}` })
+    expect(view.json().costs.totalUsd).toBe(body.totals.costUsd)
+  })
+})
+
 describe('totals: отсутствующий курс', () => {
   it('строка кассы без курса: flowUsd null и flowMissingRateRows = 1, а не ноль молча', async () => {
     // курса CNY нет намеренно
@@ -145,6 +230,12 @@ describe('totals: отсутствующий курс', () => {
     expect(body.totals.feeByCurrency).toEqual({ USD: 130, CNY: 100 })
     expect(body.totals.flowUsd).toBeNull()
     expect(body.totals.flowScope).toBe('none')
+    // этот перевод кросс-валютный и без точной суммы: курсовая разница по нему не посчитана
+    expect(body.totals.fxNotCountedTransfers).toBe(1)
+    expect(body.totals.costUsd).toBe(130 + 263)
+    const row = (body.transactions as Array<{ roomId: number; costUsd: number | null; feeUsd: number | null }>).find((t) => t.roomId === wina)!
+    expect(row.feeUsd).toBeNull()
+    expect(row.costUsd).toBeNull()
   })
 })
 
@@ -169,7 +260,10 @@ describe('totals: период', () => {
       flowScope: 'all_without_transfers',
       flowCountedRows: 0,
       flowMissingRateRows: 0,
-      transfers: { count: 0, feeUsd: 0 }
+      transfers: { count: 0, feeUsd: 0 },
+      fxNetLossUsd: 0,
+      costUsd: 0,
+      fxNotCountedTransfers: 0
     })
   })
 })
