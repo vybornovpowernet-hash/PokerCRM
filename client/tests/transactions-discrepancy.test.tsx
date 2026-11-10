@@ -2,18 +2,20 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TransactionsPage from '../src/pages/Transactions'
+import { emptyMoneyOverview } from './setup'
 import type { OrphanedDiscrepancy, Room } from '../src/lib/types'
 
 const mocks = vi.hoisted(() => ({
   roomsList: vi.fn(),
   transactionsList: vi.fn(),
+  overview: vi.fn(),
   acknowledgeDiscrepancy: vi.fn()
 }))
 
 vi.mock('../src/lib/api', () => ({
   api: {
     rooms: { list: mocks.roomsList },
-    transactions: { list: mocks.transactionsList },
+    transactions: { list: mocks.transactionsList, overview: mocks.overview },
     tournaments: { acknowledgeDiscrepancy: mocks.acknowledgeDiscrepancy }
   }
 }))
@@ -38,6 +40,8 @@ beforeEach(() => {
     .mockResolvedValueOnce({ transactions: [], discrepancies: [discrepancy] })
     .mockResolvedValue({ transactions: [], discrepancies: [] })
   mocks.acknowledgeDiscrepancy.mockReset().mockResolvedValue(undefined)
+  // страница рендерит виджет «Куда уходят деньги»: его запрос резолвится пустой сводкой
+  mocks.overview.mockReset().mockResolvedValue(emptyMoneyOverview())
 })
 
 describe('TransactionsPage — принятие расхождения', () => {

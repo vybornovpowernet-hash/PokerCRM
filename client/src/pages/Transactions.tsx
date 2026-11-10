@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type TransactionPayload } from '../lib/api'
+import { SpendingWidget } from '../components/SpendingWidget'
 import {
   DIRECTION_LABELS,
   TRANSACTION_TYPE_LABELS,
@@ -74,6 +75,9 @@ export default function TransactionsPage() {
   const [ackBusy, setAckBusy] = useState<string | null>(null)
   const [destTouched, setDestTouched] = useState(false)
   const [feedRate, setFeedRate] = useState<number | null>(null)
+  // Виджет «Куда уходят деньги» живёт своей жизнью: растёт только после правок операций,
+  // но не при смене фильтров истории (иначе его период перестал бы быть независимым).
+  const [overviewToken, setOverviewToken] = useState(0)
   const [filter, setFilter] = useState<{ type: TransactionType | ''; roomId: number | ''; dateFrom: string; dateTo: string }>({
     type: '',
     roomId: '',
@@ -280,6 +284,7 @@ export default function TransactionsPage() {
       }
       resetForm()
       emitBalancesChanged()
+      setOverviewToken((n) => n + 1)
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
@@ -292,6 +297,7 @@ export default function TransactionsPage() {
     try {
       await api.transactions.remove(t.id)
       emitBalancesChanged()
+      setOverviewToken((n) => n + 1)
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Delete failed')
@@ -312,6 +318,8 @@ export default function TransactionsPage() {
       setWriteoffFor(null)
       setWriteoffComment('')
       emitBalancesChanged()
+      // списание — это строка казино: блок «Казино за период» обязан её увидеть
+      setOverviewToken((n) => n + 1)
       await refresh()
     } catch (e) {
       setWriteoffError(e instanceof Error ? e.message : 'Не удалось списать расхождение')
@@ -506,6 +514,8 @@ export default function TransactionsPage() {
           )}
         </div>
       </form>
+
+      <SpendingWidget rooms={rooms} reloadToken={overviewToken} />
 
       <div className="rounded-xl border border-slate-700 bg-slate-800/80 p-5 shadow-lg shadow-black/40">
         <h2 className="mb-4 text-lg font-semibold text-slate-200">История операций</h2>

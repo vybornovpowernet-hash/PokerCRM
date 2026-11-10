@@ -2,11 +2,13 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TransactionsPage from '../src/pages/Transactions'
+import { emptyMoneyOverview } from './setup'
 import { formatUnits } from '../src/lib/money'
 
 const mocks = vi.hoisted(() => ({
   roomsList: vi.fn(),
   transactionsList: vi.fn(),
+  overview: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
   remove: vi.fn(),
@@ -20,6 +22,7 @@ vi.mock('../src/lib/api', () => ({
     rooms: { list: mocks.roomsList },
     transactions: {
       list: mocks.transactionsList,
+      overview: mocks.overview,
       create: mocks.create,
       update: mocks.update,
       remove: mocks.remove,
@@ -83,6 +86,8 @@ beforeEach(() => {
   mocks.roomsList.mockResolvedValue([usdRoom, rubRoom])
   mocks.create.mockResolvedValue({ id: 1 })
   mocks.suggest.mockResolvedValue({ rate: 870200, suggestedAmount: 435100 })
+  // страница рендерит виджет «Куда уходят деньги»: его запрос должен резолвиться пустой сводкой
+  mocks.overview.mockResolvedValue(emptyMoneyOverview())
 })
 
 describe('cross-currency transfer form', () => {

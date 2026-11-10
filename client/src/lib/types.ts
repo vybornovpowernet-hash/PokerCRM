@@ -109,10 +109,114 @@ export interface Transaction {
   comment: string | null
   createdAt: string
   amountUsd: number | null
+  /** `fee` converted to USD; null when its currency has no rate on that day. */
+  feeUsd: number | null
+  /** What the program would have credited (receiver currency); null when there is nothing to compare. */
+  fxExpectedDest: number | null
+  /** `fxExpectedDest - destAmount` in USD: positive = loss, negative = gain, null = nothing to compare. */
+  fxDiffUsd: number | null
   /** System day-closing write-off: immutable on the server, no edit controls. */
   writeoff: boolean
   /** Why the write-off was made; null for user-entered rows. */
   writeoffReason: WriteoffReason | null
+}
+
+/**
+ * Зеркало серверного `services/moneyOverview.ts` (виджет «Куда уходят деньги»).
+ * Все суммы приходят готовыми в минимальных единицах USD: клиент их не пересчитывает.
+ */
+export interface OverviewPeriod {
+  dateFrom: string
+  dateTo: string
+}
+
+export interface SumCount {
+  usd: number
+  count: number
+}
+
+export interface OverviewCash {
+  depositedUsd: number
+  withdrawnUsd: number
+  netInUsd: number
+  missingRateRows: number
+}
+
+export interface OverviewFeeRoom {
+  roomId: number
+  name: string
+  usd: number
+  count: number
+}
+
+export type OverviewFeeType = Extract<TransactionType, 'deposit' | 'withdraw' | 'transfer'>
+
+export interface OverviewFees {
+  totalUsd: number
+  rows: number
+  missingRateRows: number
+  byType: Record<OverviewFeeType, SumCount>
+  /** Сырые мин. единицы по валютам — между валютами не складываются. */
+  byCurrency: Record<string, number>
+  byRoom: OverviewFeeRoom[]
+}
+
+export interface OverviewCasino {
+  totalUsd: number
+  winsUsd: number
+  lossesUsd: number
+  manualUsd: number
+  autoUsd: number
+  rows: number
+  missingRateRows: number
+  byReason: Record<WriteoffReason, SumCount>
+}
+
+export interface OverviewFxExcluded {
+  noDestAmount: number
+  sameCurrency: number
+  noRate: number
+}
+
+export interface OverviewFx {
+  lossesUsd: number
+  gainsUsd: number
+  netLossUsd: number
+  rows: number
+  excluded: OverviewFxExcluded
+}
+
+export interface OverviewRoom {
+  roomId: number
+  name: string
+  depositedUsd: number
+  withdrawnUsd: number
+  feesUsd: number
+  casinoUsd: number
+  fxUsd: number
+  transfersOut: number
+  transfersIn: number
+}
+
+export interface OverviewRoute {
+  fromRoomId: number
+  fromRoomName: string
+  /** null, когда рум-получатель удалён. */
+  toRoomId: number | null
+  toRoomName: string
+  count: number
+  feeUsd: number
+  feeByCurrency: Record<string, number>
+}
+
+export interface MoneyOverview {
+  period: OverviewPeriod
+  cash: OverviewCash
+  fees: OverviewFees
+  casino: OverviewCasino
+  fx: OverviewFx
+  rooms: OverviewRoom[]
+  routes: OverviewRoute[]
 }
 
 export interface FlowTotal {

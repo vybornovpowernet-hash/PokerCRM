@@ -7,6 +7,7 @@ import type {
   DayReconcile,
   FlowTotal,
   MbrSummary,
+  MoneyOverview,
   Notification,
   OrphanedDiscrepancy,
   ReconcileFlag,
@@ -122,6 +123,8 @@ export const api = {
       ).then((r) => ({ transactions: r.transactions, discrepancies: r.discrepancies ?? [] })),
     flows: (dateFrom: string, dateTo: string) =>
       request<{ flows: FlowTotal[] }>(`/transactions/flows${queryString({ dateFrom, dateTo })}`).then((r) => r.flows),
+    overview: (dateFrom: string, dateTo: string) =>
+      request<MoneyOverview>(`/transactions/overview${queryString({ dateFrom, dateTo })}`),
     create: (payload: TransactionPayload) =>
       request<{ transaction: Transaction }>('/transactions', { method: 'POST', body: JSON.stringify(payload) }).then((r) => r.transaction),
     update: (id: number, payload: TransactionPayload) =>

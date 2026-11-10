@@ -1,9 +1,44 @@
 import { afterEach } from 'vitest'
 import { cleanup } from '@testing-library/react'
+import type { MoneyOverview } from '../src/lib/types'
 
 afterEach(() => {
   cleanup()
 })
+
+/**
+ * Пустой ответ `GET /api/transactions/overview`. Нужен тестам страницы «Транзакции»,
+ * которые мокают `api` по методам, интересующим именно их: виджет на странице живёт
+ * всегда, и без этого значения его запрос падал бы на отсутствующем методе мока.
+ */
+export function emptyMoneyOverview(): MoneyOverview {
+  const zero = { usd: 0, count: 0 }
+  return {
+    period: { dateFrom: '2026-01-01', dateTo: '2026-12-31' },
+    cash: { depositedUsd: 0, withdrawnUsd: 0, netInUsd: 0, missingRateRows: 0 },
+    fees: {
+      totalUsd: 0,
+      rows: 0,
+      missingRateRows: 0,
+      byType: { deposit: { ...zero }, withdraw: { ...zero }, transfer: { ...zero } },
+      byCurrency: {},
+      byRoom: []
+    },
+    casino: {
+      totalUsd: 0,
+      winsUsd: 0,
+      lossesUsd: 0,
+      manualUsd: 0,
+      autoUsd: 0,
+      rows: 0,
+      missingRateRows: 0,
+      byReason: { casino: { ...zero }, fx: { ...zero }, other: { ...zero } }
+    },
+    fx: { lossesUsd: 0, gainsUsd: 0, netLossUsd: 0, rows: 0, excluded: { noDestAmount: 0, sameCurrency: 0, noRate: 0 } },
+    rooms: [],
+    routes: []
+  }
+}
 
 if (typeof window !== 'undefined' && !window.ResizeObserver) {
   class ResizeObserverStub {
