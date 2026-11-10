@@ -30,8 +30,10 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
     })
     const discrepancies = includeDiscrepancies === '1' ? orphanedDiscrepancies(dateFrom, dateTo, roomId) : []
     // `totals` is computed from exactly the rows above: «Комиссии по фильтру» on
-    // the page must never disagree with the list it sits under.
-    return { transactions, discrepancies, totals: transactionsTotals(transactions) }
+    // the page must never disagree with the list it sits under. The type filter is
+    // passed along because it decides whether a зашло/ушло sum exists at all.
+    const flowType = type && type !== '' ? (type as TransactionInput['type']) : undefined
+    return { transactions, discrepancies, totals: transactionsTotals(transactions, flowType) }
   })
 
   app.get<{ Querystring: { dateFrom?: string; dateTo?: string } }>('/api/transactions/overview', async (req) => {

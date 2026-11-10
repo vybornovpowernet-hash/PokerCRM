@@ -203,26 +203,78 @@ export function transactionFx(args: {
 }
 
 /**
- * Fee totals over already filtered rows (min units). Raw fee sums are kept split
- * by currency: cents and kopecks must never be added together; only the `*Usd`
- * fields aggregate, and a row whose fee has no rate is counted in
- * `missingRateRows` instead of silently becoming 0.
+ * Режим суммы «зашло/ушло». Название обязательно передаётся наружу, потому что
+ * `flowUsd: null` означает два разных факта: «суммы по этому фильтру не бывает»
+ * (тип = перевод) и «нет курса по одной из строк». Клиент не должен угадывать это
+ * по собственному фильтру — иначе он подписал бы пустоту как ошибку курсов.
  */
-export function transactionsTotals(rows: Transaction[]): {
+export type FlowScope = 'all_without_transfers' | 'type' | 'none'
+
+/**
+ * Итоги по уже отфильтрованным строкам (мин. единицы USD).
+ *
+ * `flowUsd` — знакочувствительная сумма внешних потоков: казино знаковое, остальное по
+ * `direction`. Переводы из неё исключены: это перекладывание своих денег между своими
+ * румами, а не приход и не расход. `null` — только когда у одной из учитываемых строк
+ * нет курса (`flowMissingRateRows`) или когда режим суммы не определён (`flowScope: 'none'`);
+ * сырые комиссии по-прежнему лежат в `feeByCurrency` по валютам и никогда не складываются между ними.
+ */
+export function transactionsTotals(
+  rows: Transaction[],
+  typeFilter?: TransactionType
+): {
   feeUsd: number
   feeByCurrency: Record<string, number>
   missingRateRows: number
+  flowUsd: number | null
+  flowScope: FlowScope
+  flowCountedRows: number
+  flowMissingRateRows: number
+  transfers: { count: number; feeUsd: number }
 } {
   let feeUsd = 0
   let missingRateRows = 0
   const feeByCurrency: Record<string, number> = {}
+  let flow = 0
+  let flowCountedRows = 0
+  let flowMissingRateRows = 0
+  let transferCount = 0
+  let transfersFeeUsd = 0
+
   for (const t of rows) {
-    if (t.fee <= 0) continue
-    feeByCurrency[t.currency] = (feeByCurrency[t.currency] ?? 0) + t.fee
-    if (t.feeUsd === null) missingRateRows += 1
-    else feeUsd += t.feeUsd
+    if (t.fee > 0) {
+      feeByCurrency[t.currency] = (feeByCurrency[t.currency] ?? 0) + t.fee
+      if (t.feeUsd === null) missingRateRows += 1
+      else {
+        feeUsd += t.feeUsd
+        if (t.type === 'transfer') transfersFeeUsd += t.feeUsd
+      }
+    }
+    if (t.type === 'transfer') {
+      transferCount += 1
+      continue
+    }
+    if (t.amountUsd === null) {
+      flowMissingRateRows += 1
+      continue
+    }
+    flowCountedRows += 1
+    // casino is a signed gaming result; deposits and withdrawals follow the direction
+    flow += t.type === 'casino' ? t.amountUsd : t.direction === 'in' ? t.amountUsd : -t.amountUsd
   }
-  return { feeUsd, feeByCurrency, missingRateRows }
+
+  const flowScope: FlowScope = typeFilter === undefined ? 'all_without_transfers' : typeFilter === 'transfer' ? 'none' : 'type'
+  return {
+    feeUsd,
+    feeByCurrency,
+    missingRateRows,
+    // режим «тип = перевод»: суммы зашло/ушло не существует, и 0 врал бы про пустой баланс
+    flowUsd: flowScope === 'none' ? null : flowMissingRateRows > 0 ? null : flow,
+    flowScope,
+    flowCountedRows: flowScope === 'none' ? 0 : flowCountedRows,
+    flowMissingRateRows: flowScope === 'none' ? 0 : flowMissingRateRows,
+    transfers: { count: transferCount, feeUsd: transfersFeeUsd }
+  }
 }
 
 function validateString(value: unknown, field: string, max: number): string | null {
