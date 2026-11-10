@@ -194,6 +194,8 @@ export interface OverviewRoom {
   feesUsd: number
   casinoUsd: number
   fxUsd: number
+  /** Комиссии рума вместе с курсовой разницей: `feesUsd + fxUsd`. Сумма по румам равна `costs.totalUsd`. */
+  costsUsd: number
   transfersOut: number
   transfersIn: number
 }
@@ -206,7 +208,23 @@ export interface OverviewRoute {
   toRoomName: string
   count: number
   feeUsd: number
+  /** Курсовая разница переводов этого маршрута; 0 там, где посчитать нельзя. */
+  fxUsd: number
+  /** Стоимость маршрута: `feeUsd + fxUsd`. */
+  costsUsd: number
   feeByCurrency: Record<string, number>
+}
+
+/** «Комиссии» одной сущностью: явные комиссии плюс курсовая разница переводов. */
+export interface OverviewCosts {
+  totalUsd: number
+  feesUsd: number
+  fxNetLossUsd: number
+  fxLossesUsd: number
+  fxGainsUsd: number
+  missingRateRows: number
+  /** Кросс-валютные переводы, где курсовую разницу посчитать нельзя: нет точной суммы либо нет курса. */
+  fxNotCountedTransfers: number
 }
 
 export interface MoneyOverview {
@@ -215,6 +233,7 @@ export interface MoneyOverview {
   fees: OverviewFees
   casino: OverviewCasino
   fx: OverviewFx
+  costs: OverviewCosts
   rooms: OverviewRoom[]
   routes: OverviewRoute[]
 }

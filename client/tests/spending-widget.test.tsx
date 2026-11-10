@@ -43,8 +43,14 @@ const rooms: Room[] = [
   { id: 7, name: 'RedStar', cashCurrency: 'EUR', tournamentCurrency: 'EUR', rateSource: 'er-api', color: '#fda4af', isWallet: false, createdAt: '2026-09-01 00:00:00' }
 ]
 
+/**
+ * Числа зеркалят серверный ответ: `costs.totalUsd` сложил сервер, клиент только
+ * показывает. kurсовая разница входит в «Комиссии» (411 + 263 = 674).
+ */
 function overviewFixture(overrides: Partial<MoneyOverview> = {}): MoneyOverview {
+  const base = emptyMoneyOverview()
   return {
+    ...base,
     period: { dateFrom: '2026-11-01', dateTo: '2026-11-10' },
     cash: { depositedUsd: 10_115, withdrawnUsd: 2_000, netInUsd: 8_115, missingRateRows: 0 },
     fees: {
@@ -72,16 +78,24 @@ function overviewFixture(overrides: Partial<MoneyOverview> = {}): MoneyOverview 
       missingRateRows: 0,
       byReason: { casino: { usd: 0, count: 0 }, fx: { usd: -984, count: 2 }, other: { usd: 0, count: 0 } }
     },
-    fx: { lossesUsd: 265, gainsUsd: 2, netLossUsd: 263, rows: 2, excluded: { noDestAmount: 2, sameCurrency: 12, noRate: 1 } },
+    fx: { lossesUsd: 265, gainsUsd: 2, netLossUsd: 263, rows: 2, excluded: { noDestAmount: 1, sameCurrency: 12, noRate: 1 } },
+    costs: {
+      totalUsd: 674,
+      feesUsd: 411,
+      fxNetLossUsd: 263,
+      fxLossesUsd: 265,
+      fxGainsUsd: 2,
+      missingRateRows: 0,
+      fxNotCountedTransfers: 2
+    },
     rooms: [
-      { roomId: 9, name: 'Bybit', depositedUsd: 10_000, withdrawnUsd: 2_000, feesUsd: 410, casinoUsd: 0, fxUsd: 265, transfersOut: 3, transfersIn: 6 },
-      { roomId: 2, name: 'PokerDom', depositedUsd: 115, withdrawnUsd: 0, feesUsd: 1, casinoUsd: -15_468, fxUsd: -2, transfersOut: 1, transfersIn: 1 }
+      { roomId: 9, name: 'Bybit', depositedUsd: 10_000, withdrawnUsd: 2_000, feesUsd: 410, casinoUsd: 0, fxUsd: 265, costsUsd: 675, transfersOut: 3, transfersIn: 6 },
+      { roomId: 2, name: 'PokerDom', depositedUsd: 115, withdrawnUsd: 0, feesUsd: 1, casinoUsd: -15_468, fxUsd: -2, costsUsd: -1, transfersOut: 1, transfersIn: 1 }
     ],
     routes: [
-      { fromRoomId: 9, fromRoomName: 'Bybit', toRoomId: 2, toRoomName: 'PokerDom', count: 5, feeUsd: 650, feeByCurrency: { USD: 650 } },
-      { fromRoomId: 7, fromRoomName: 'RedStar', toRoomId: 9, toRoomName: 'Bybit', count: 2, feeUsd: 0, feeByCurrency: { EUR: 0 } },
-      // удалённый рум-получатель: `toRoomId` единственное поле ответа overview, которое бывает null
-      { fromRoomId: 6, fromRoomName: '1win', toRoomId: null, toRoomName: '—', count: 1, feeUsd: 0, feeByCurrency: { RUB: 0 } }
+      { fromRoomId: 9, fromRoomName: 'Bybit', toRoomId: 2, toRoomName: 'PokerDom', count: 5, feeUsd: 650, fxUsd: -2, costsUsd: 648, feeByCurrency: { USD: 650 } },
+      { fromRoomId: 7, fromRoomName: 'RedStar', toRoomId: 9, toRoomName: 'Bybit', count: 2, feeUsd: 0, fxUsd: 265, costsUsd: 265, feeByCurrency: { EUR: 0 } },
+      { fromRoomId: 6, fromRoomName: '1win', toRoomId: null, toRoomName: '—', count: 1, feeUsd: 0, fxUsd: 0, costsUsd: 0, feeByCurrency: { RUB: 0 } }
     ],
     ...overrides
   }
@@ -89,12 +103,19 @@ function overviewFixture(overrides: Partial<MoneyOverview> = {}): MoneyOverview 
 
 const region = (name: string) => screen.getByRole('region', { name })
 
-/** Значение строки/карточки, подписанной слева: сосед `[data-value]` того же контейнера. */
+/** Значение карточки/строки: сосед `[data-value]` того же контейнера. */
 function valueNear(scope: HTMLElement, label: string): HTMLElement {
   const labelNode = within(scope).getByText(label)
   const value = labelNode.parentElement?.querySelector('[data-value]')
   if (!value) throw new Error(`нет значения рядом с «${label}»`)
   return value as HTMLElement
+}
+
+/** Раскрыть подробности и вернуть их контейнер. */
+async function openDetails(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: 'Подробнее' }))
+  await waitFor(() => expect(screen.queryByText('Прямые комиссии')).toBeTruthy())
+  return screen.getByRole('button', { name: 'Подробнее' })
 }
 
 beforeEach(() => {
@@ -115,15 +136,6 @@ afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
 })
-
-/** Промис с ручной отдачей: тест решает, когда ответ придёт, и в каком порядке. */
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((r) => {
-    resolve = r
-  })
-  return { promise, resolve }
-}
 
 async function renderWidget() {
   render(<SpendingWidget rooms={rooms} />)
@@ -171,178 +183,271 @@ describe('период виджета', () => {
   })
 })
 
-describe('цвета и слова', () => {
-  it('выведено, комиссии и проигрыши — красным; внесено — нейтрально; выигрыши — зелёным', async () => {
+describe('верхний ряд: ровно пять карточек', () => {
+  it('карточки: Внесено, Выведено, третья, Комиссии, Казино — и ничего сверху больше', async () => {
     await renderWidget()
     const summary = region('Сводка за период')
-    const casino = region('Казино за период')
-    expect(valueNear(summary, 'Выведено').className).toContain('text-red-400')
-    expect(valueNear(summary, 'Комиссии').className).toContain('text-red-400')
-    expect(valueNear(casino, 'Проигрыши').className).toContain('text-red-400')
-    expect(valueNear(casino, 'Выигрыши').className).toContain('text-emerald-400')
-    const deposited = valueNear(summary, 'Внесено')
-    expect(deposited.className).toContain('text-slate-100')
-    expect(deposited.className).not.toContain('text-red-400')
-    expect(deposited.className).not.toContain('text-emerald-400')
+    for (const label of ['Внесено', 'Выведено', 'Осталось отбить', 'Комиссии', 'Казино']) {
+      expect(within(summary).getByText(label)).toBeTruthy()
+    }
+    expect(summary.querySelectorAll('[data-value]')).toHaveLength(5)
+    // карточки «Курсовая разница» и целого блока курсовой разницы больше нет
+    expect(screen.queryByText('Курсовая разница')).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Курсовая разница по переводам' })).toBeNull()
+    expect(screen.queryByText('Чистый внос')).toBeNull()
+    expect(screen.queryByText('внесено минус выведено, без комиссий и переводов')).toBeNull()
   })
 
-  it('потери и выгоды — положительными числами со словами «потеря» и «выгода»', async () => {
+  it('Внесено белое, Выведено зелёное', async () => {
     await renderWidget()
-    const fx = region('Курсовая разница по переводам')
-    expect(valueNear(fx, 'Потери на курсе').textContent).toBe('$2.65 потеря')
-    expect(valueNear(fx, 'Потери на курсе').className).toContain('text-red-400')
-    expect(valueNear(fx, 'Выгоды на курсе').textContent).toBe('$0.02 выгода')
-    expect(valueNear(fx, 'Выгоды на курсе').className).toContain('text-emerald-400')
     const summary = region('Сводка за период')
-    expect(summary.textContent).toContain('чистая потеря')
-    expect(valueNear(summary, 'Курсовая разница').textContent).toBe('$2.63')
+    expect(valueNear(summary, 'Внесено').className).toContain('text-slate-100')
+    expect(valueNear(summary, 'Выведено').className).toContain('text-emerald-400')
+    expect(valueNear(summary, 'Внесено').textContent).toBe('$101.15')
+    expect(valueNear(summary, 'Выведено').textContent).toBe('$20.00')
   })
 
-  it('отрицательный итог курсовой разницы подписывается «чистая выгода»', async () => {
+  it('третья карточка при плюсе: «Осталось отбить», без знака, белая, без подписи', async () => {
+    await renderWidget()
+    const summary = region('Сводка за период')
+    expect(valueNear(summary, 'Осталось отбить').textContent).toBe('$81.15')
+    expect(valueNear(summary, 'Осталось отбить').className).toContain('text-slate-100')
+    expect(valueNear(summary, 'Осталось отбить').className).not.toContain('text-red')
+    expect(valueNear(summary, 'Осталось отбить').className).not.toContain('text-emerald')
+    // пояснительной подписи под числом нет — формула живёт только во всплывающей подсказке
+    expect(summary.textContent).not.toContain('внесено минус выведено')
+    expect(screen.getByTitle('Внесено минус выведено')).toBeTruthy()
+  })
+
+  it('третья карточка при минусе: «В плюсе», модуль со знаком плюс, зелёная', async () => {
     mocks.overview.mockResolvedValue(
-      overviewFixture({
-        fx: { lossesUsd: 2, gainsUsd: 265, netLossUsd: -263, rows: 2, excluded: { noDestAmount: 0, sameCurrency: 0, noRate: 0 } }
-      })
+      overviewFixture({ cash: { depositedUsd: 2_000, withdrawnUsd: 22_000, netInUsd: -20_000, missingRateRows: 0 } })
     )
     await renderWidget()
     const summary = region('Сводка за период')
-    expect(summary.textContent).toContain('чистая выгода')
-    expect(summary.textContent).not.toContain('чистая потеря')
-    expect(valueNear(summary, 'Курсовая разница').className).toContain('text-emerald-400')
+    expect(within(summary).queryByText('Осталось отбить')).toBeNull()
+    expect(valueNear(summary, 'В плюсе').textContent).toBe('+$200.00')
+    expect(valueNear(summary, 'В плюсе').className).toContain('text-emerald-400')
+    expect(valueNear(summary, 'В плюсе').className).not.toContain('text-red')
+    expect(screen.getByTitle('Внесено минус выведено')).toBeTruthy()
   })
 
-  it('чистый внос показывает формулу расчёта', async () => {
+  it('третья карточка при нуле: «Вышли в ноль», $0.00, белая', async () => {
+    mocks.overview.mockResolvedValue(
+      overviewFixture({ cash: { depositedUsd: 5_000, withdrawnUsd: 5_000, netInUsd: 0, missingRateRows: 0 } })
+    )
     await renderWidget()
-    expect(screen.getByText('внесено минус выведено, без комиссий и переводов')).toBeTruthy()
-    expect(valueNear(region('Сводка за период'), 'Чистый внос').textContent).toBe('$81.15')
+    const summary = region('Сводка за период')
+    expect(valueNear(summary, 'Вышли в ноль').textContent).toBe('$0.00')
+    expect(valueNear(summary, 'Вышли в ноль').className).toContain('text-slate-100')
+    expect(valueNear(summary, 'Вышли в ноль').className).not.toContain('text-red')
   })
 
-  it('казино в сводке — знаковое, красным при убытке', async () => {
+  it('красного у третьей карточки не бывает ни при одном знаке', async () => {
+    for (const net of [8_115, -20_000, 0]) {
+      mocks.overview.mockResolvedValue(
+        overviewFixture({ cash: { depositedUsd: 10_115, withdrawnUsd: 2_000, netInUsd: net, missingRateRows: 0 } })
+      )
+      const { unmount } = render(<SpendingWidget rooms={rooms} />)
+      await screen.findByText('Куда уходят деньги')
+      const summary = region('Сводка за период')
+      const value = summary.querySelectorAll('[data-value]')[2] as HTMLElement | undefined
+      if (!value) throw new Error('в сводке нет третьей карточки')
+      expect(value.className).not.toContain('text-red')
+      unmount()
+    }
+  })
+
+  it('Казино красное при убытке и показывает число операций', async () => {
     await renderWidget()
     const summary = region('Сводка за период')
     expect(valueNear(summary, 'Казино').textContent).toBe('-$154.68')
     expect(valueNear(summary, 'Казино').className).toContain('text-red-400')
-    expect(valueNear(summary, 'Внесено').textContent).toBe('$101.15')
-    expect(valueNear(summary, 'Комиссии').textContent).toBe('$4.11')
+    expect(within(summary).getByText('3 операции')).toBeTruthy()
   })
 })
 
-describe('счётчики исключений и предупреждения', () => {
-  it('показывает исключённые переводы с подсказкой', async () => {
+describe('карточка «Комиссии»: комиссии и курсовая разница вместе', () => {
+  it('красная при положительном итоге и показывает, из чего он сложён', async () => {
     await renderWidget()
-    const fx = region('Курсовая разница по переводам')
-    expect(within(fx).getByText(/2 перевода без точной суммы зачисления/)).toBeTruthy()
-    expect(within(fx).getByText(/1 перевод без курса/)).toBeTruthy()
-    expect(within(fx).getByText(/12 переводов между румами одной валюты/)).toBeTruthy()
-    expect(within(fx).getByText('впишите сумму зачисления через «Изменить», чтобы учесть')).toBeTruthy()
+    const summary = region('Сводка за период')
+    expect(valueNear(summary, 'Комиссии').textContent).toBe('$6.74')
+    expect(valueNear(summary, 'Комиссии').className).toContain('text-red-400')
+    expect(within(summary).getByText('прямые $4.11 · на курсе $2.63')).toBeTruthy()
   })
 
-  it('не показывает счётчики исключений, когда они нулевые', async () => {
+  it('при выигрыше на курсе подпись меняется, а сумма остаётся серверной', async () => {
     mocks.overview.mockResolvedValue(
       overviewFixture({
-        fx: { lossesUsd: 0, gainsUsd: 0, netLossUsd: 0, rows: 0, excluded: { noDestAmount: 0, sameCurrency: 0, noRate: 0 } }
+        costs: { totalUsd: -263, feesUsd: 0, fxNetLossUsd: -263, fxLossesUsd: 0, fxGainsUsd: 263, missingRateRows: 0, fxNotCountedTransfers: 0 }
       })
     )
     await renderWidget()
-    const fx = region('Курсовая разница по переводам')
-    expect(within(fx).queryByText(/без точной суммы зачисления/)).toBeNull()
-    expect(within(fx).queryByText(/без курса/)).toBeNull()
-    expect(within(fx).queryByText(/между румами одной валюты/)).toBeNull()
-    expect(within(fx).queryByText('впишите сумму зачисления через «Изменить», чтобы учесть')).toBeNull()
+    const summary = region('Сводка за период')
+    expect(valueNear(summary, 'Комиссии').textContent).toBe('-$2.63')
+    expect(valueNear(summary, 'Комиссии').className).toContain('text-emerald-400')
+    expect(within(summary).getByText('прямые $0.00 · на курсе выгода $2.63')).toBeTruthy()
   })
 
-  it('предупреждает о неполных суммах в каждом блоке отдельно', async () => {
-    mocks.overview.mockResolvedValue(
-      overviewFixture({
-        cash: { depositedUsd: 10_115, withdrawnUsd: 2_000, netInUsd: 8_115, missingRateRows: 3 },
-        fees: { ...overviewFixture().fees, missingRateRows: 1 },
-        casino: { ...overviewFixture().casino, missingRateRows: 1 }
-      })
-    )
+  it('нулевые комиссии — белые', async () => {
+    mocks.overview.mockResolvedValue(overviewFixture({ ...emptyMoneyOverview(), cash: { depositedUsd: 1, withdrawnUsd: 0, netInUsd: 1, missingRateRows: 0 } }))
     await renderWidget()
-    // Предупреждения не суммируются: у кассы, комиссий и казино свои счётчики,
-    // и одна строка может не иметь курса сразу и по сумме, и по комиссии.
-    expect(await screen.findByText('нет курса по 3 операциям — суммы неполные')).toBeTruthy()
-    expect(within(region('Комиссии за период')).getByText('нет курса по 1 комиссии — суммы неполные')).toBeTruthy()
-    expect(within(region('Казино за период')).getByText('нет курса по 1 строке казино — суммы неполные')).toBeTruthy()
+    const summary = region('Сводка за период')
+    expect(valueNear(summary, 'Комиссии').className).toContain('text-slate-100')
   })
 
-  it('не предупреждает, когда курс есть у всех строк', async () => {
+  it('«курс не учтён у N переводов» видно только при счётчике больше нуля', async () => {
     await renderWidget()
-    expect(screen.queryByText(/нет курса по/)).toBeNull()
+    expect(await screen.findByText('курс не учтён у 2 переводов')).toBeTruthy()
   })
 
-  it('null вместо числа — прочерк, а не ноль', async () => {
-    const broken = structuredClone(overviewFixture()) as unknown as { cash: { netInUsd: number | null } }
-    broken.cash.netInUsd = null
-    mocks.overview.mockResolvedValue(broken as unknown as MoneyOverview)
+  it('склонение счётчика непосчитанных переводов', async () => {
+    mocks.overview.mockResolvedValue(overviewFixture({ costs: { ...overviewFixture().costs, fxNotCountedTransfers: 1 } }))
+    render(<SpendingWidget rooms={rooms} />)
+    expect(await screen.findByText('курс не учтён у 1 перевода')).toBeTruthy()
+  })
+
+  it('при нуле счётчика строки нет', async () => {
+    mocks.overview.mockResolvedValue(overviewFixture({ costs: { ...overviewFixture().costs, fxNotCountedTransfers: 0 } }))
+    render(<SpendingWidget rooms={rooms} />)
+    await screen.findByText('Куда уходят деньги')
+    await waitFor(() => expect(mocks.overview).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByText(/курс не учтён/)).toBeNull()
+  })
+
+  it('янтарное предупреждение об отсутствии курса в карточке комиссий', async () => {
+    mocks.overview.mockResolvedValue(overviewFixture({ costs: { ...overviewFixture().costs, missingRateRows: 3 } }))
     await renderWidget()
-    expect(valueNear(region('Сводка за период'), 'Чистый внос').textContent).toBe('—')
-    // нулей в сводке из-за отсутствующего курса быть не должно (в таблице они честные: там реальный 0)
-    expect(within(region('Сводка за период')).queryByText('$0.00')).toBeNull()
+    expect(await screen.findByText('нет курса по 3 операциям, сумма неполная')).toBeTruthy()
+    expect(screen.queryByText(/нет курса по 1 операциям/)).toBeNull()
   })
 })
 
-describe('казино и разбивка комиссий', () => {
-  it('разводит вручную записанное и авто-списания по причинам', async () => {
+describe('подробности под кнопкой «Подробнее»', () => {
+  it('по умолчанию свёрнуто и отсутствует в DOM', async () => {
     await renderWidget()
-    const casino = region('Казино за период')
-    expect(valueNear(casino, 'Записано вручную').textContent).toBe('-$144.84')
-    expect(valueNear(casino, 'Авто-списания').textContent).toBe('-$9.84')
-    expect(valueNear(casino, 'Разница курсов').textContent).toBe('-$9.84 · 2')
-    expect(within(casino).getByText('ваши ручные списания, не путать с расчётной курсовой разницей')).toBeTruthy()
+    const button = screen.getByRole('button', { name: 'Подробнее' })
+    expect(button.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('Прямые комиссии')).toBeNull()
+    expect(screen.queryByText('Потери на курсе')).toBeNull()
+    expect(screen.queryByRole('table')).toBeNull()
   })
 
-  it('не показывает причину без строк', async () => {
+  it('клик раскрывает, aria-expanded меняется, повторный клик сворачивает', async () => {
     await renderWidget()
-    const casino = region('Казино за период')
-    expect(within(casino).queryByText('Казино')).toBeNull()
-    expect(within(casino).queryByText('Прочее')).toBeNull()
+    const user = userEvent.setup()
+    const button = screen.getByRole('button', { name: 'Подробнее' })
+    await user.click(button)
+    expect(button.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText('Прямые комиссии')).toBeTruthy()
+    await user.click(button)
+    expect(button.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('Прямые комиссии')).toBeNull()
   })
 
-  it('комиссии: по типам с числом операций и по румам', async () => {
+  it('комиссии: прямые с итогом, по типам с числом операций, потери и выгоды, итого серверное', async () => {
     await renderWidget()
-    const fees = region('Комиссии за период')
+    await openDetails(userEvent.setup())
+    const fees = region('Комиссии')
+    expect(valueNear(fees, 'Прямые комиссии').textContent).toBe('$4.11')
     expect(valueNear(fees, 'Депозит').textContent).toBe('$1.51 · 2')
     expect(valueNear(fees, 'Вывод').textContent).toBe('$1.30 · 2')
     expect(valueNear(fees, 'Перевод').textContent).toBe('$1.30 · 1')
-    expect(valueNear(fees, 'Bybit').textContent).toBe('$4.10 · 3')
-    expect(valueNear(fees, 'PokerDom').textContent).toBe('$0.01 · 1')
+    expect(valueNear(fees, 'Потери на курсе').textContent).toBe('$2.65')
+    expect(valueNear(fees, 'Потери на курсе').className).toContain('text-red-400')
+    expect(valueNear(fees, 'Выгоды на курсе').textContent).toBe('$0.02')
+    expect(valueNear(fees, 'Выгоды на курсе').className).toContain('text-emerald-400')
+    // «Итого» равно costs.totalUsd как пришло: в фикстуре 674, а не 411 + 263 в другом порядке
+    expect(valueNear(fees, 'Итого').textContent).toBe('$6.74')
+  })
+
+  it('итог не пересчитывается: серверный costs.totalUsd показывается как есть', async () => {
+    mocks.overview.mockResolvedValue(
+      overviewFixture({
+        costs: { totalUsd: 700, feesUsd: 411, fxNetLossUsd: 263, fxLossesUsd: 265, fxGainsUsd: 2, missingRateRows: 0, fxNotCountedTransfers: 0 }
+      })
+    )
+    await renderWidget()
+    await openDetails(userEvent.setup())
+    expect(valueNear(region('Комиссии'), 'Итого').textContent).toBe('$7.00')
+    expect(region('Комиссии').textContent).not.toContain('$6.74')
+  })
+
+  it('казино: выигрыши, проигрыши, вручную, авто-списания и причины', async () => {
+    await renderWidget()
+    await openDetails(userEvent.setup())
+    const casino = region('Казино')
+    expect(valueNear(casino, 'Выигрыши').textContent).toBe('$0.16')
+    expect(valueNear(casino, 'Выигрыши').className).toContain('text-emerald-400')
+    expect(valueNear(casino, 'Проигрыши').textContent).toBe('-$154.84')
+    expect(valueNear(casino, 'Проигрыши').className).toContain('text-red-400')
+    expect(valueNear(casino, 'Записано вручную').textContent).toBe('-$144.84')
+    expect(valueNear(casino, 'Авто-списания').textContent).toBe('-$9.84')
+    expect(valueNear(casino, 'Списание на курс').textContent).toBe('-$9.84 · 2')
+    expect(within(casino).getByText('ваши ручные списания остатка дня, в Комиссии не входят')).toBeTruthy()
+    // прежнего названия причины в этом виджете нет
+    expect(within(casino).queryByText('Разница курсов')).toBeNull()
+  })
+
+  it('не показывает причину и типы без строк', async () => {
+    const without = overviewFixture()
+    without.fees.byType = { deposit: { usd: 151, count: 2 }, withdraw: { usd: 0, count: 0 }, transfer: { usd: 0, count: 0 } }
+    without.casino.byReason = { casino: { usd: 0, count: 0 }, fx: { usd: 0, count: 0 }, other: { usd: 0, count: 0 } }
+    mocks.overview.mockResolvedValue(without)
+    await renderWidget()
+    await openDetails(userEvent.setup())
+    const casino = region('Казино')
+    // причина «Казино» не показана: в блоке осталась одна строка с этим словом — его заголовок
+    expect(within(casino).getAllByText('Казино')).toHaveLength(1)
+    expect(within(casino).queryByText('Прочее')).toBeNull()
+    expect(within(casino).queryByText('Списание на курс')).toBeNull()
+    expect(within(casino).queryByText(/нет курса по/)).toBeNull()
+    expect(within(casino).queryByText('ваши ручные списания остатка дня, в Комиссии не входят')).toBeNull()
+    const fees = region('Комиссии')
+    expect(within(fees).queryByText('Перевод')).toBeNull()
+    expect(within(fees).queryByText('Вывод')).toBeNull()
   })
 })
 
-describe('таблицы', () => {
-  it('по румам: имя в цвете рума, все колонки, курсовая разница получателя', async () => {
+describe('таблицы в подробностях', () => {
+  it('по румам: имя в цвете рума, колонки и стоимость рума', async () => {
     await renderWidget()
+    await openDetails(userEvent.setup())
     const table = screen.getByRole('table', { name: 'Куда уходят деньги по румам' })
-    for (const column of ['Внесено', 'Выведено', 'Комиссии', 'Казино', 'Курс. разница', 'Переводы']) {
+    for (const column of ['Рум', 'Внесено', 'Выведено', 'Комиссии', 'Казино']) {
       expect(within(table).getByText(column)).toBeTruthy()
     }
+    expect(within(table).queryByText(/Курс/)).toBeNull()
     expect(within(table).getByText('PokerDom').getAttribute('style')).toContain('rgb(110, 231, 183)')
+    expect(within(table).getByText('$6.75')).toBeTruthy()
+    expect(within(table).getByText('-$0.01')).toBeTruthy()
     expect(within(table).getByText('-$154.68')).toBeTruthy()
-    expect(within(table).getByText('-$0.02')).toBeTruthy()
-    expect(within(table).getByText('↑6 ↓3')).toBeTruthy()
   })
 
-  it('маршруты: только число переводов и комиссии, без сумм переводов', async () => {
+  it('куда шли переводы: маршруты, число и стоимость; без сумм переводов', async () => {
     await renderWidget()
-    const table = screen.getByRole('table', { name: 'Маршруты переводов' })
-    for (const column of ['Откуда', 'Куда', 'Переводов', 'Комиссии']) {
-      expect(within(table).getByText(column)).toBeTruthy()
-    }
+    await openDetails(userEvent.setup())
+    const table = screen.getByRole('table', { name: 'Куда шли переводы' })
+    expect(within(table).getByText('Откуда → Куда')).toBeTruthy()
+    expect(within(table).getByText('Переводов')).toBeTruthy()
+    expect(within(table).getByText('Комиссии')).toBeTruthy()
     expect(within(table).queryByText(/Переведено|Сумма переводов|Итого переводов/)).toBeNull()
     const rows = within(table).getAllByRole('row')
     const bybitRow = rows.find((r) => within(r).queryByText('PokerDom')) as HTMLElement
     expect(within(bybitRow).getByText('5')).toBeTruthy()
-    expect(within(bybitRow).getByText('$6.50')).toBeTruthy()
-    const redstarRow = rows.find((r) => within(r).queryByText('RedStar')) as HTMLElement
-    expect(within(redstarRow).getByText('2')).toBeTruthy()
-    expect(within(redstarRow).getByText('—')).toBeTruthy()
-    expect(within(redstarRow).queryByText(/€/)).toBeNull()
-    // маршрут с удалённым получателем: null показан прочерком, а не нулём и не пустотой
+    expect(within(bybitRow).getByText('$6.48')).toBeTruthy()
+    // удалённый получатель и нулевая стоимость маршрута: прочерки вместо null и $0.00
     const goneRow = rows.find((r) => within(r).queryByText('1win')) as HTMLElement
     expect(within(goneRow).getAllByText('—').length).toBe(2)
     expect(within(goneRow).queryByText('$0.00')).toBeNull()
+  })
+
+  it('слово «лента» не встречается ни в сводке, ни в подробностях', async () => {
+    await renderWidget()
+    await openDetails(userEvent.setup())
+    expect(screen.queryByText(/лент/)).toBeNull()
+    expect(document.body.textContent).not.toMatch(/лент/)
   })
 })
 
@@ -356,7 +461,7 @@ describe('состояния', () => {
     expect(screen.queryByText(/\$/)).toBeNull()
     expect(screen.queryByText('За период операций нет')).toBeNull()
     gate.resolve(overviewFixture())
-    expect(await screen.findByText('$4.11')).toBeTruthy()
+    expect(await screen.findByText('$6.74')).toBeTruthy()
   })
 
   it('ошибка с кнопкой «Повторить»', async () => {
@@ -365,7 +470,7 @@ describe('состояния', () => {
     expect(await screen.findByText('сервер недоступен')).toBeTruthy()
     await userEvent.setup().click(screen.getByRole('button', { name: 'Повторить' }))
     await waitFor(() => expect(mocks.overview).toHaveBeenCalledTimes(2))
-    expect(await screen.findByText('$4.11')).toBeTruthy()
+    expect(await screen.findByText('$6.74')).toBeTruthy()
   })
 
   it('пустой период', async () => {
@@ -373,6 +478,15 @@ describe('состояния', () => {
     await renderWidget()
     expect(await screen.findByText('За период операций нет')).toBeTruthy()
     expect(screen.queryByText(/\$/)).toBeNull()
+  })
+
+  it('null вместо числа — прочерк, а не ноль', async () => {
+    const broken = structuredClone(overviewFixture()) as unknown as { costs: { totalUsd: number | null } }
+    broken.costs.totalUsd = null
+    mocks.overview.mockResolvedValue(broken as unknown as MoneyOverview)
+    await renderWidget()
+    expect(valueNear(region('Сводка за период'), 'Комиссии').textContent).toBe('—')
+    expect(screen.queryByText('$0.00')).toBeNull()
   })
 
   it('опоздавший ответ прежнего периода игнорируется', async () => {
@@ -388,12 +502,12 @@ describe('состояния', () => {
 
     await userEvent.setup().click(screen.getByRole('button', { name: 'За год' }))
     await waitFor(() => expect(mocks.overview).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(valueNear(region('Сводка за период'), 'Внесено').textContent).toBe('$555.00'))
+    await waitFor(() => expect(valueNear(region('Сводка за период'), 'Осталось отбить').textContent).toBe('$555.00'))
 
     slow.resolve(overviewFixture())
     await new Promise((r) => setTimeout(r, 0))
-    expect(valueNear(region('Сводка за период'), 'Внесено').textContent).toBe('$555.00')
-    expect(screen.queryByText('$101.15')).toBeNull()
+    expect(valueNear(region('Сводка за период'), 'Осталось отбить').textContent).toBe('$555.00')
+    expect(screen.queryByText('$81.15')).toBeNull()
   })
 })
 
@@ -437,6 +551,15 @@ describe('перезапрос после правок операций', () => 
   })
 })
 
+/** Промис с ручной отдачей: тест решает, когда придёт ответ. */
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((r) => {
+    resolve = r
+  })
+  return { promise, resolve }
+}
+
 function row(id: number, type: 'deposit' | 'withdraw', direction: 'in' | 'out', amount: number) {
   return {
     id,
@@ -459,6 +582,7 @@ function row(id: number, type: 'deposit' | 'withdraw', direction: 'in' | 'out', 
     feeUsd: 0,
     fxExpectedDest: null,
     fxDiffUsd: null,
+    costUsd: 0,
     writeoff: false,
     writeoffReason: null
   }

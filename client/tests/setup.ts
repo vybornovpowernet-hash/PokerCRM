@@ -35,6 +35,15 @@ export function emptyMoneyOverview(): MoneyOverview {
       byReason: { casino: { ...zero }, fx: { ...zero }, other: { ...zero } }
     },
     fx: { lossesUsd: 0, gainsUsd: 0, netLossUsd: 0, rows: 0, excluded: { noDestAmount: 0, sameCurrency: 0, noRate: 0 } },
+    costs: {
+      totalUsd: 0,
+      feesUsd: 0,
+      fxNetLossUsd: 0,
+      fxLossesUsd: 0,
+      fxGainsUsd: 0,
+      missingRateRows: 0,
+      fxNotCountedTransfers: 0
+    },
     rooms: [],
     routes: []
   }
