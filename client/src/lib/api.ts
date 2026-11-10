@@ -24,6 +24,7 @@ import type {
   TournamentRow,
   TournamentSummary,
   Transaction,
+  TransactionTotals,
   TransactionType,
   UpdateCheckResult,
   WriteoffReason
@@ -115,12 +116,17 @@ export const api = {
   },
   transactions: {
     list: (filters: { type?: TransactionType; roomId?: number; dateFrom?: string; dateTo?: string } = {}) =>
-      request<{ transactions: Transaction[]; discrepancies: OrphanedDiscrepancy[] }>(
+      request<{ transactions: Transaction[]; discrepancies: OrphanedDiscrepancy[]; totals?: TransactionTotals }>(
         `/transactions${queryString({
           ...filters,
           includeDiscrepancies: filters.type ? undefined : '1'
         })}`
-      ).then((r) => ({ transactions: r.transactions, discrepancies: r.discrepancies ?? [] })),
+      ).then((r) => ({
+        transactions: r.transactions,
+        discrepancies: r.discrepancies ?? [],
+        // сервер отдаёт итоги всегда; `null` здесь — только защита от ответа более ранней сборки
+        totals: r.totals ?? null
+      })),
     flows: (dateFrom: string, dateTo: string) =>
       request<{ flows: FlowTotal[] }>(`/transactions/flows${queryString({ dateFrom, dateTo })}`).then((r) => r.flows),
     overview: (dateFrom: string, dateTo: string) =>

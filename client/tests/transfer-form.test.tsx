@@ -101,7 +101,7 @@ describe('cross-currency transfer form', () => {
     expect(mocks.suggest).toHaveBeenCalledWith(
       expect.objectContaining({ from: 'USD', to: 'RUB', roomId: 2, amount: 5000 })
     )
-    expect(screen.getByText(/Курс ленты: 87\.02/)).toBeTruthy()
+    expect(screen.getByText(/Курс программы: 87\.02/)).toBeTruthy()
   })
 
   it('keeps the user-typed exact figure over a newer suggestion and sends it in the payload', async () => {
@@ -269,5 +269,39 @@ describe('stale exact amount after the currency pair changes', () => {
         expect.objectContaining({ roomId: 1, destinationRoomId: 3, destAmount: null })
       )
     )
+  })
+})
+
+describe('подсказка курса в форме перевода', () => {
+  it('пока сумма отправки не введена — нейтральный текст, без «нет данных»', async () => {
+    await renderLoaded()
+    await chooseTransfer('1', '2')
+    expect(await screen.findByText('Введите сумму перевода: подставим расчёт по курсу программы')).toBeTruthy()
+    expect(mocks.suggest).not.toHaveBeenCalled()
+    expect(document.body.textContent).not.toMatch(/нет данных/)
+    expect(document.body.textContent).not.toMatch(/лент/i)
+  })
+
+  it('известный курс: «Курс программы: X», «по вашей сумме» — только при введённом зачислении', async () => {
+    await renderLoaded()
+    const user = await chooseTransfer('1', '2')
+    await user.type(screen.getByPlaceholderText('100.00'), '50')
+    expect(await screen.findByText(/Курс программы: 87\.02 · по вашей сумме: 87\.02/)).toBeTruthy()
+
+    const credited = screen.getByPlaceholderText('₽0.00') as HTMLInputElement
+    await user.clear(credited)
+    expect(screen.getByText(/Курс программы: 87\.02/)).toBeTruthy()
+    expect(screen.queryByText(/по вашей сумме/)).toBeNull()
+    expect(document.body.textContent).not.toMatch(/лент/i)
+  })
+
+  it('курса на дату нет: просим вписать сумму зачисления вручную', async () => {
+    mocks.suggest.mockResolvedValue({ rate: null, suggestedAmount: null })
+    await renderLoaded()
+    const user = await chooseTransfer('1', '2')
+    await user.type(screen.getByPlaceholderText('100.00'), '50')
+    expect(await screen.findByText('Курса программы на эту дату нет: впишите сумму зачисления вручную')).toBeTruthy()
+    expect(mocks.suggest).toHaveBeenCalled()
+    expect(document.body.textContent).not.toMatch(/лент/i)
   })
 })

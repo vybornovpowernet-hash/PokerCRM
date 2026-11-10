@@ -115,10 +115,37 @@ export interface Transaction {
   fxExpectedDest: number | null
   /** `fxExpectedDest - destAmount` in USD: positive = loss, negative = gain, null = nothing to compare. */
   fxDiffUsd: number | null
+  /** Стоимость строки: `feeUsd` плюс `fxDiffUsd`; null, как `feeUsd`, когда курса для комиссии нет. */
+  costUsd: number | null
   /** System day-closing write-off: immutable on the server, no edit controls. */
   writeoff: boolean
   /** Why the write-off was made; null for user-entered rows. */
   writeoffReason: WriteoffReason | null
+}
+
+/**
+ * Зеркало серверного `transactionsTotals` (`services/funds.ts`): итоги по тем же
+ * строкам, что вернул список. Клиент их не пересчитывает — только форматирует.
+ */
+export type FlowScope = 'all_without_transfers' | 'type' | 'none'
+
+export interface TransactionTotals {
+  feeUsd: number
+  /** Сырые мин. единицы по валютам — между валютами не складываются. */
+  feeByCurrency: Record<string, number>
+  missingRateRows: number
+  /** Знаковая сумма внешних потоков без переводов; null — нет курса или режим без суммы. */
+  flowUsd: number | null
+  flowScope: FlowScope
+  flowCountedRows: number
+  flowMissingRateRows: number
+  transfers: { count: number; feeUsd: number }
+  /** Чистая курсовая разница переводов: потери минус выгоды. */
+  fxNetLossUsd: number
+  /** «Комиссии по фильтру»: `feeUsd + fxNetLossUsd`, посчитано сервером. */
+  costUsd: number
+  /** Кросс-валютные переводы, где разницу посчитать нельзя: нет точной суммы либо нет курса. */
+  fxNotCountedTransfers: number
 }
 
 /**

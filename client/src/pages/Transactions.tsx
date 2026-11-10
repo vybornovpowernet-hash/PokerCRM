@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, type TransactionPayload } from '../lib/api'
 import { SpendingWidget } from '../components/SpendingWidget'
+import { HistoryTotals } from '../components/HistoryTotals'
 import {
   DIRECTION_LABELS,
   TRANSACTION_TYPE_LABELS,
@@ -11,6 +12,7 @@ import {
   type OrphanedDiscrepancy,
   type Room,
   type Transaction,
+  type TransactionTotals,
   type TransactionType,
   type WriteoffReason
 } from '../lib/types'
@@ -59,10 +61,38 @@ function WarningIcon() {
   )
 }
 
+/**
+ * Мелкая вторая строка в столбце «Комиссия»: сколько перевод стоил на курсе.
+ * `fxDiffUsd` считает сервер; здесь только знак, модуль, слово и цвет.
+ */
+function TransferRateNote({ row }: { row: Transaction }) {
+  if (row.type !== 'transfer') return null
+  const diff = row.fxDiffUsd
+  if (diff !== null && diff !== 0) {
+    const value = formatAmount(Math.abs(diff), 'USD')
+    return (
+      <span className={`block text-xs font-normal ${diff > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+        {diff > 0 ? `курс ${value}` : `курс −${value}`}
+      </span>
+    )
+  }
+  // кросс-валютный перевод без разницы: её нечем посчитать, и это видно
+  if (diff === null && row.destCurrency !== null && row.destCurrency !== row.currency) {
+    return (
+      <span className="block text-xs font-normal text-slate-500" title="впишите сумму зачисления через «Изменить»">
+        курс не учтён
+      </span>
+    )
+  }
+  return null
+}
+
 export default function TransactionsPage() {
   const [rooms, setRooms] = useState<Room[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [discrepancies, setDiscrepancies] = useState<OrphanedDiscrepancy[]>([])
+  // Итоги по фильтру приходят с сервера вместе со списком: клиент их не складывает.
+  const [totals, setTotals] = useState<TransactionTotals | null>(null)
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -75,6 +105,9 @@ export default function TransactionsPage() {
   const [ackBusy, setAckBusy] = useState<string | null>(null)
   const [destTouched, setDestTouched] = useState(false)
   const [feedRate, setFeedRate] = useState<number | null>(null)
+  // 'idle' — сумма отправки ещё не введена (запрос курса не уходил), 'pending' — в полёте,
+  // 'done' — ответ получен: тогда `feedRate` либо курс, либо null = курса на дату нет.
+  const [rateState, setRateState] = useState<'idle' | 'pending' | 'done'>('idle')
   // Виджет «Куда уходят деньги» живёт своей жизнью: растёт только после правок операций,
   // но не при смене фильтров истории (иначе его период перестал бы быть независимым).
   const [overviewToken, setOverviewToken] = useState(0)
@@ -100,6 +133,7 @@ export default function TransactionsPage() {
       })
       setTransactions(res.transactions)
       setDiscrepancies(res.discrepancies)
+      setTotals(res.totals)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load transactions')
     } finally {
@@ -110,16 +144,6 @@ export default function TransactionsPage() {
   useEffect(() => {
     refresh()
   }, [filter])
-
-  const netChangeUsd = useMemo(() => {
-    let sum = 0
-    for (const t of transactions) {
-      if (t.amountUsd === null) return null
-      // casino is a signed gaming result; in/out flows use the direction formula
-      sum += t.type === 'casino' ? t.amountUsd : t.direction === 'in' ? t.amountUsd : -t.amountUsd
-    }
-    return sum
-  }, [transactions])
 
   const selectedRoom = rooms.find((r) => r.id === form.roomId)
   const otherRooms = rooms.filter((r) => r.id !== form.roomId)
@@ -139,17 +163,21 @@ export default function TransactionsPage() {
       // the pair stopped being cross-currency: an exact figure typed for the old
       // pair is meaningless (and dangerous) for the new one, so it is dropped here
       setFeedRate(null)
+      setRateState('idle')
       setDestTouched(false)
       setForm((prev) => (prev.destAmount === '' ? prev : { ...prev, destAmount: '' }))
       return
     }
     const amount = parseUnits(form.amount)
     if (amount === null || amount < 1) {
+      // no request was sent: this is not «the rate is missing», it is «nothing to ask yet»
       setFeedRate(null)
+      setRateState('idle')
       if (!destTouched) setForm((prev) => ({ ...prev, destAmount: '' }))
       return
     }
     let cancelled = false
+    setRateState('pending')
     api.rates
       .suggest({
         from: selectedRoom.cashCurrency,
@@ -161,6 +189,7 @@ export default function TransactionsPage() {
       .then((r) => {
         if (cancelled) return
         setFeedRate(r.rate)
+        setRateState('done')
         // prefill only while the field is untouched — the user's exact cash-desk
         // figure always wins over the parsed market rate
         if (!destTouched && r.suggestedAmount !== null) {
@@ -168,7 +197,9 @@ export default function TransactionsPage() {
         }
       })
       .catch(() => {
-        if (!cancelled) setFeedRate(null)
+        if (cancelled) return
+        setFeedRate(null)
+        setRateState('done')
       })
     return () => {
       cancelled = true
@@ -198,6 +229,7 @@ export default function TransactionsPage() {
     if (type !== 'transfer') {
       setDestTouched(false)
       setFeedRate(null)
+      setRateState('idle')
     }
   }
 
@@ -225,6 +257,7 @@ export default function TransactionsPage() {
     setForm({ ...EMPTY_FORM, roomId: rooms[0]?.id ?? 0 })
     setDestTouched(false)
     setFeedRate(null)
+    setRateState('idle')
     setError(null)
   }
 
@@ -475,19 +508,19 @@ export default function TransactionsPage() {
                 inputMode="decimal"
               />
             </div>
-            <p className="text-xs text-slate-500">
+            <p className={`text-xs ${rateState === 'done' && feedRate === null ? 'text-amber-400' : 'text-slate-500'}`}>
               {(() => {
                 const amount = parseUnits(form.amount)
                 const credited = parseUnits(form.destAmount)
-                const feed = feedRate === null ? null : feedRate / 10_000
-                const implied = amount && credited ? credited / amount : null
-                const parts = [
-                  feed !== null ? `Курс ленты: ${feed.toFixed(2)}` : 'Курс ленты: нет данных',
-                  implied !== null ? `Курс по вводу: ${implied.toFixed(2)}` : null
-                ].filter(Boolean)
-                return parts.join(' · ')
+                if (rateState === 'idle' || amount === null) return 'Введите сумму перевода: подставим расчёт по курсу программы'
+                if (rateState === 'pending') return 'Считаем курс программы…'
+                if (feedRate === null) return 'Курса программы на эту дату нет: впишите сумму зачисления вручную'
+                const rate = feedRate / 10_000
+                const implied = amount > 0 && credited !== null ? credited / amount : null
+                return implied === null
+                  ? `Курс программы: ${rate.toFixed(2)}`
+                  : `Курс программы: ${rate.toFixed(2)} · по вашей сумме: ${implied.toFixed(2)}`
               })()}
-              {feedRate !== null && ' — курс кассы рума может отличаться, впиши точную сумму'}
             </p>
           </div>
         )}
@@ -555,17 +588,7 @@ export default function TransactionsPage() {
             <input type="date" className={`${inputCls} w-auto`} value={filter.dateTo} onChange={(e) => setFilter({ ...filter, dateTo: e.target.value })} />
           </label>
         </div>
-        <span className="ml-auto text-sm text-slate-400">
-          Суммарно по фильтру:{' '}
-          <span
-            className={`font-medium ${
-              netChangeUsd != null ? (netChangeUsd >= 0 ? 'text-emerald-400' : 'text-red-400') : 'text-slate-300'
-            }`}
-          >
-            {netChangeUsd != null ? `${netChangeUsd >= 0 ? '+' : ''}${formatAmount(netChangeUsd, 'USD')}` : '—'}
-          </span>
-          {netChangeUsd == null && <span className="ml-1 text-xs text-amber-400">(для части операций нет курса)</span>}
-        </span>
+        <HistoryTotals totals={totals} />
         </div>
       </div>
 
@@ -693,7 +716,10 @@ export default function TransactionsPage() {
                       </>
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-right text-slate-400">{t.fee > 0 ? formatAmount(t.fee, t.currency) : '—'}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right text-slate-400">
+                    {t.fee > 0 ? formatAmount(t.fee, t.currency) : '—'}
+                    <TransferRateNote row={t} />
+                  </td>
                   <td className="px-4 py-3 text-slate-400">{t.counterpart ?? '—'}</td>
                   <td className="max-w-0 w-full truncate px-4 py-3" title={t.comment ?? undefined}>
                     {t.comment ? (
