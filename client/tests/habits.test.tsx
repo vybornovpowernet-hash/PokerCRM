@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HabitsPage } from '../src/habits/HabitsPage'
 import { addMonths, currentMonthKey, dayKey, monthDays, monthLabel } from '../src/habits/metrics'
 import type { HabitHistoryItem, HabitStatus, HabitWithLogs } from '../src/habits/habits.types'
@@ -10,6 +10,12 @@ const mocks = vi.hoisted(() => ({ request: vi.fn() }))
 vi.mock('../src/lib/api', () => ({
   request: mocks.request
 }))
+
+// «Сегодня» закреплено: фикстура ниже ставит startDay = сегодня, а трекинг делает
+// ячейки раньше startDay неактивными (HabitTracker: disabled={beforeStart}). Без
+// фиксации тест кликает по 10–15 числам и зелёный только до 10-го/15-го числа месяца.
+// Полдень локального времени — чтобы часовой пояс не сдвигал сутки на соседний день.
+const TODAY = new Date(2026, 10, 10, 12, 0, 0)
 
 let nextId = 1
 
@@ -45,8 +51,14 @@ function historyItem(over: Partial<HabitHistoryItem> = {}): HabitHistoryItem {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(TODAY)
   nextId = 1
   mocks.request.mockReset()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 function monthEndKey(month: string): string {
