@@ -1,10 +1,10 @@
 import type { FastifyInstance } from 'fastify'
 import { parseId } from '../lib/http.js'
-import { archiveHabit, createHabit, listHabitHistory, listHabits, reorderHabits, restoreHabit, setHabitLog, updateHabit } from '../services/habits/service.js'
+import { archiveHabit, createHabit, listHabitHistory, listHabitsWithToday, reorderHabits, restoreHabit, setHabitLog, updateHabit } from '../services/habits/service.js'
 
 export async function habitsRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { month?: string } }>('/api/habits', async (req) => {
-    return { habits: listHabits(req.query?.month) }
+    return listHabitsWithToday(req.query?.month)
   })
 
   app.get('/api/habits/history', async () => {

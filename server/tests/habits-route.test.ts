@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { createApp } from '../src/app.js'
 import { initDb, resetDbForTests, setDbForTests } from '../src/db.js'
 import { dayKey } from '../src/lib/date.js'
+import { setDayStartHour } from '../src/services/settings.js'
 
 let app: FastifyInstance
 
@@ -30,7 +31,51 @@ describe('habits routes', () => {
   it('GET /api/habits returns an empty list initially', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/habits' })
     expect(res.statusCode).toBe(200)
-    expect(JSON.parse(res.body)).toEqual({ habits: [] })
+    expect(Object.keys(res.json()).sort()).toEqual(['habits', 'today'])
+    expect(res.json().habits).toEqual([])
+  })
+
+  it('GET /api/habits answers with the logical today, not the calendar one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      setDayStartHour(7)
+      vi.setSystemTime(new Date(2026, 10, 14, 3, 30))
+      const night = (await app.inject({ method: 'GET', url: '/api/habits?month=2026-11' })).json() as { habits: unknown[]; today: string }
+      expect(night.today).toBe('2026-11-13')
+      expect(Array.isArray(night.habits)).toBe(true)
+
+      vi.setSystemTime(new Date(2026, 10, 14, 7, 0))
+      expect(((await app.inject({ method: 'GET', url: '/api/habits?month=2026-11' })).json() as { today: string }).today).toBe('2026-11-14')
+
+      vi.setSystemTime(new Date(2026, 11, 1, 3, 30))
+      expect(((await app.inject({ method: 'GET', url: '/api/habits?month=2026-11' })).json() as { today: string }).today).toBe('2026-11-30')
+
+      setDayStartHour(0)
+      vi.setSystemTime(new Date(2026, 10, 14, 3, 30))
+      expect(((await app.inject({ method: 'GET', url: '/api/habits?month=2026-11' })).json() as { today: string }).today).toBe('2026-11-14')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('PUT /:id/log follows the logical today while the calendar today is still future', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      setDayStartHour(7)
+      vi.setSystemTime(new Date(2026, 10, 14, 3, 30))
+      const id = (await app.inject({ method: 'POST', url: '/api/habits', payload: { name: 'Медитация' } })).json().habit.id as number
+
+      expect((await app.inject({ method: 'PUT', url: `/api/habits/${id}/log`, payload: { date: '2026-11-13', status: 'done' } })).statusCode).toBe(200)
+      expect((await app.inject({ method: 'PUT', url: `/api/habits/${id}/log`, payload: { date: '2026-11-12', status: 'done' } })).statusCode).toBe(200)
+      const future = await app.inject({ method: 'PUT', url: `/api/habits/${id}/log`, payload: { date: '2026-11-14', status: 'done' } })
+      expect(future.statusCode).toBe(400)
+      expect(future.json().error).toBe('Нельзя отмечать привычку на будущую дату')
+
+      vi.setSystemTime(new Date(2026, 10, 14, 7, 0))
+      expect((await app.inject({ method: 'PUT', url: `/api/habits/${id}/log`, payload: { date: '2026-11-14', status: 'done' } })).statusCode).toBe(200)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('GET /api/habits validates the month query', async () => {

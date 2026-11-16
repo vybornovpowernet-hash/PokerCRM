@@ -154,6 +154,7 @@ export function HabitsPage() {
             <HabitTracker
               habits={habits.habits}
               month={habits.month}
+              today={habits.today}
               isCurrentMonth={habits.isCurrentMonth}
               sortable={habits.isCurrentMonth}
               onSetLog={habits.setLog}

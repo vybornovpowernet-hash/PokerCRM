@@ -30,6 +30,16 @@ export interface HabitHistoryItem extends Habit {
   stats: HabitStats
 }
 
+/**
+ * Ответ GET /api/habits: список месяца плюс игровой «сегодня» сервера. `today`
+ * может не прийти (старый сервер) — тогда клиент не подсвечивает день и не
+ * блокирует будущие клетки, то есть остаётся при прежнем поведении.
+ */
+export interface HabitsListResult {
+  habits: HabitWithLogs[]
+  today: string | null
+}
+
 export interface HabitLogResult {
   date: string
   status: HabitStatus

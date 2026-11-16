@@ -11,11 +11,14 @@ vi.mock('../src/lib/api', () => ({
   request: mocks.request
 }))
 
-// «Сегодня» закреплено: фикстура ниже ставит startDay = сегодня, а трекинг делает
-// ячейки раньше startDay неактивными (HabitTracker: disabled={beforeStart}). Без
-// фиксации тест кликает по 10–15 числам и зелёный только до 10-го/15-го числа месяца.
-// Полдень локального времени — чтобы часовой пояс не сдвигал сутки на соседний день.
-const TODAY = new Date(2026, 10, 10, 12, 0, 0)
+// «Сегодня» закреплено: ночь 21-го при пороге 7 — календарное сегодня 21.11, а игровой
+// день ещё 20.11 (сервер считает сутки с порогом day_start_hour). Клетка 21.11 — будущая.
+// Полночь локального времени: часовой пояс не должен сдвигать сутки на соседний день.
+const TODAY = new Date(2026, 10, 21, 0, 30)
+
+// Игровое «сегодня» из ответа сервера. Клиентские часы показывают 21-е: если подсветка и
+// блокировка уедут за Date(), эти тесты разойдутся — так они проверяют источник дня.
+const SERVER_TODAY = '2026-11-20'
 
 let nextId = 1
 
@@ -25,7 +28,9 @@ function habit(over: Partial<HabitWithLogs> = {}): HabitWithLogs {
     name: 'Медитация',
     color: '#f1f5f9',
     createdAt: new Date().toISOString(),
-    startDay: dayKey(new Date()),
+    // startDay больше не привязан к «сегодня»: иначе beforeStart и «будущий день»
+    // пересекались бы, и тесты не различали две блокировки.
+    startDay: `${currentMonthKey()}-01`,
     archivedAt: null,
     sortOrder: 0,
     logs: {},
@@ -66,7 +71,10 @@ function monthEndKey(month: string): string {
   return days[days.length - 1]?.date ?? `${month}-31`
 }
 
-function stubApi(active: () => HabitWithLogs[], archived: () => HabitHistoryItem[] = () => []): void {
+type StubOptions = { today?: string | null }
+
+function stubApi(active: () => HabitWithLogs[], archived: () => HabitHistoryItem[] = () => [], options: StubOptions = {}): void {
+  const today = options.today === undefined ? SERVER_TODAY : options.today
   mocks.request.mockImplementation(async (path: string, init?: { method?: string; body?: string }) => {
     const method = init?.method ?? 'GET'
     const month = /^\/habits\?month=(\d{4}-\d{2})$/.exec(path)?.[1] ?? currentMonthKey()
@@ -95,7 +103,8 @@ function stubApi(active: () => HabitWithLogs[], archived: () => HabitHistoryItem
     if (method === 'DELETE' && /^\/habits\/\d+$/.test(path)) {
       return { ok: true }
     }
-    return { habits: visible() }
+    // Ответ «старого сервера» (today === null) поля today не содержит вовсе.
+    return today === null ? { habits: visible() } : { habits: visible(), today }
   })
 }
 
@@ -448,5 +457,122 @@ describe('HabitsPage', () => {
     expect(grip).toHaveProperty('disabled', true)
     fireEvent.keyDown(grip, { key: 'ArrowUp', altKey: true })
     expect(mocks.request).not.toHaveBeenCalled()
+  })
+})
+
+// Подсветка «сегодня» и блокировка будущих клеток берут день из ответа сервера (today),
+// а не из new Date() браузера. Клиентские часы закреплены на 21.11 00:30, игровой
+// день сервера — 20.11: любой возврат к локальным часам ломает эти тесты сам.
+describe('HabitTracker и игровой «сегодня» сервера', () => {
+  function cellOf(habitName: string, date: string): HTMLElement {
+    const cell = screen.getByRole('button', { name: cellName(habitName, date) })
+    if (!(cell instanceof HTMLButtonElement)) throw new Error('ячейка не кнопка')
+    return cell
+  }
+
+  function isHighlighted(habitName: string, date: string): boolean {
+    const td = cellOf(habitName, date).closest('td')
+    return (td?.getAttribute('class') ?? '').includes('bg-indigo-400')
+  }
+
+  it('подсвечивает клетку серверного today, а не клетку локальных часов', async () => {
+    stubApi(() => [habit({ logs: {} })])
+    render(<HabitsPage />)
+    await screen.findByText('Медитация')
+
+    expect(dayKey(new Date())).toBe('2026-11-21')
+    expect(isHighlighted('Медитация', SERVER_TODAY)).toBe(true)
+    expect(isHighlighted('Медитация', '2026-11-21')).toBe(false)
+  })
+
+  it('клетка позже today заблокирована будущим днём', async () => {
+    const user = userEvent.setup()
+    stubApi(() => [habit({ logs: {} })])
+    render(<HabitsPage />)
+    await screen.findByText('Медитация')
+
+    const future = cellOf('Медитация', '2026-11-21')
+    expect(future).toHaveProperty('disabled', true)
+    expect(future.getAttribute('title')).toBe('Нельзя отметить будущий день')
+
+    fireEvent.click(future)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(mocks.request.mock.calls.filter(([path, init]) => /^\/habits\/\d+\/log$/.test(path) && init?.method === 'PUT')).toHaveLength(0)
+
+    // самой today остаётся кликабельной и не помечена будущим
+    const today = cellOf('Медитация', SERVER_TODAY)
+    expect(today).toHaveProperty('disabled', false)
+    expect(today.getAttribute('title')).toBeNull()
+  })
+
+  it('клик по клетке today открывает popover и шлёт PUT с этой датой', async () => {
+    const user = userEvent.setup()
+    stubApi(() => [habit({ logs: {} })])
+    render(<HabitsPage />)
+    await screen.findByText('Медитация')
+
+    await user.click(cellOf('Медитация', SERVER_TODAY))
+    const dialog = screen.getByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: /Сделано/ }))
+
+    await waitFor(() =>
+      expect(mocks.request).toHaveBeenCalledWith('/habits/1/log', {
+        method: 'PUT',
+        body: JSON.stringify({ date: SERVER_TODAY, status: 'done' })
+      })
+    )
+  })
+
+  it('ответ без today: ничего не подсвечено и сверх beforeStart ничего не заблокировано', async () => {
+    stubApi(() => [habit({ logs: {} })], () => [], { today: null })
+    render(<HabitsPage />)
+    await screen.findByText('Медитация')
+
+    expect(isHighlighted('Медитация', '2026-11-21')).toBe(false)
+    expect(isHighlighted('Медитация', '2026-11-20')).toBe(false)
+
+    // клетка за пределами и календарного, и игрового дня остаётся доступной
+    const far = cellOf('Медитация', '2026-11-30')
+    expect(far).toHaveProperty('disabled', false)
+    expect(far.getAttribute('title')).toBeNull()
+  })
+
+  it('месяц целиком после today — весь будущий, подсветки нет', async () => {
+    stubApi(() => [habit({ logs: {} })], () => [], { today: '2026-10-31' })
+    render(<HabitsPage />)
+    await screen.findByText('Медитация')
+
+    expect(isHighlighted('Медитация', '2026-11-01')).toBe(false)
+    for (const date of ['2026-11-01', '2026-11-15', '2026-11-30']) {
+      const cell = cellOf('Медитация', date)
+      expect(cell).toHaveProperty('disabled', true)
+      expect(cell.getAttribute('title')).toBe('Нельзя отметить будущий день')
+    }
+  })
+
+  it('в месяце без today подсветки нет, даже когда today в следующем месяце', async () => {
+    const user = userEvent.setup()
+    stubApi(() => [habit({ startDay: `${addMonths(currentMonthKey(), -1)}-01`, logs: {} })])
+    render(<HabitsPage />)
+    await screen.findByText('Медитация')
+
+    await user.click(screen.getByRole('button', { name: 'Предыдущий месяц' }))
+    const prev = addMonths(currentMonthKey(), -1)
+    await screen.findByText(monthLabel(prev))
+
+    expect(isHighlighted('Медитация', `${prev}-15`)).toBe(false)
+    expect(cellOf('Медитация', `${prev}-15`)).toHaveProperty('disabled', false)
+  })
+
+  it('прогресс месяца не зависит от today: знаменатель — только дни с отметками', async () => {
+    stubApi(() => [habit({ logs: { '2026-11-10': 'done', '2026-11-11': 'partial', '2026-11-12': 'missed' } })], () => [], {
+      today: '2026-11-13'
+    })
+    render(<HabitsPage />)
+    await screen.findByText('Медитация')
+
+    // done + половина partial из трёх отмеченных дней — 50%, «сегодня» в расчёт не входит
+    expect(screen.getAllByText('50%')).toHaveLength(2)
+    expect(screen.getByText(/1\.5 из 3/)).not.toBeNull()
   })
 })

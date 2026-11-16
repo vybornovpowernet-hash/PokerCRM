@@ -1,8 +1,13 @@
 import { request } from '../lib/api'
-import type { Habit, HabitHistoryItem, HabitInput, HabitLogResult, HabitStatus, HabitWithLogs } from './habits.types'
+import type { Habit, HabitHistoryItem, HabitsListResult, HabitInput, HabitLogResult, HabitStatus, HabitWithLogs } from './habits.types'
 
 export const habitsApi = {
-  list: (month: string) => request<{ habits: HabitWithLogs[] }>(`/habits?month=${encodeURIComponent(month)}`).then((r) => r.habits),
+  // Ответ несёт и игровой «сегодня» сервера: день считает сервер, клиент показывает.
+  list: (month: string): Promise<HabitsListResult> =>
+    request<{ habits: HabitWithLogs[]; today?: string | null }>(`/habits?month=${encodeURIComponent(month)}`).then((r) => ({
+      habits: r.habits,
+      today: typeof r.today === 'string' ? r.today : null
+    })),
   history: () => request<{ habits: HabitHistoryItem[] }>('/habits/history').then((r) => r.habits),
   create: (name: string, color: string) =>
     request<{ habit: Habit }>('/habits', { method: 'POST', body: JSON.stringify({ name, color }) }).then((r) => r.habit),

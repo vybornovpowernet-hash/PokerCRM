@@ -19,6 +19,12 @@ export interface HabitWithLogs extends Habit {
   logs: Record<string, HabitStatus>
 }
 
+/** GET /api/habits: список месяца плюс игровое «сегодня» от сервера. */
+export interface HabitListResult {
+  habits: HabitWithLogs[]
+  today: string
+}
+
 export interface HabitStats {
   done: number
   partial: number

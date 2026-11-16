@@ -10,6 +10,8 @@ function message(err: unknown): string {
 
 export interface HabitsState {
   habits: HabitWithLogs[] | null
+  /** Игровой «сегодня» сервера; null, пока ответ не пришёл (или сервер его не отдаёт). */
+  today: string | null
   month: string
   isCurrentMonth: boolean
   error: string | null
@@ -30,6 +32,7 @@ export interface HabitsState {
 
 export function useHabits(): HabitsState {
   const [habits, setHabits] = useState<HabitWithLogs[] | null>(null)
+  const [today, setToday] = useState<string | null>(null)
   const [month, setMonthState] = useState<string>(currentMonthKey())
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -50,9 +53,10 @@ export function useHabits(): HabitsState {
     const seq = ++seqRef.current
     setBusy(true)
     try {
-      const list = await habitsApi.list(targetMonth)
+      const page = await habitsApi.list(targetMonth)
       if (!mountedRef.current || seq !== seqRef.current) return
-      setHabits(list)
+      setHabits(page.habits)
+      setToday(page.today)
       setError(null)
     } catch (err) {
       if (!mountedRef.current || seq !== seqRef.current) return
@@ -183,6 +187,7 @@ export function useHabits(): HabitsState {
 
   return {
     habits,
+    today,
     month,
     isCurrentMonth: month === currentMonthKey(),
     error,

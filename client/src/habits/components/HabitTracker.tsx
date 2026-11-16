@@ -2,13 +2,15 @@ import { useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { Reorder, useDragControls } from 'motion/react'
 import type { HabitStatus, HabitWithLogs } from '../habits.types'
-import { dayKey, dayLabel, formatPoints, habitMonthProgress, monthDays, overallMonthProgress, pluralRu, type MonthDay } from '../metrics'
+import { dayLabel, formatPoints, habitMonthProgress, monthDays, overallMonthProgress, pluralRu, type MonthDay } from '../metrics'
 import { HabitPopover } from './HabitPopover'
 import { CloseIcon, GripIcon, PencilIcon } from './icons'
 
 interface HabitTrackerProps {
   habits: HabitWithLogs[]
   month: string
+  /** Игровой «сегодня» сервера (null — сервер его не прислал: ничего не подсвечиваем и не блокируем). */
+  today?: string | null
   isCurrentMonth: boolean
   sortable: boolean
   onSetLog: (id: number, date: string, status: HabitStatus | null) => Promise<void>
@@ -30,7 +32,8 @@ interface Anchor {
 interface HabitRowProps {
   habit: HabitWithLogs
   days: MonthDay[]
-  today: string
+  /** Игровой «сегодня» сервера; null — день неизвестен, поэтому ни подсветки, ни блокировки будущего. */
+  today: string | null
   isCurrentMonth: boolean
   sortable: boolean
   confirmDelete: number | null
@@ -45,12 +48,11 @@ interface HabitRowProps {
 const actionCls =
   'flex h-6 w-6 items-center justify-center rounded-md text-slate-500 transition-colors duration-150 hover:bg-white/5 hover:text-slate-200'
 
-export function HabitTracker({ habits, month, isCurrentMonth, sortable, onSetLog, onEdit, onArchive, onReorder, onOrderCommit, onMove }: HabitTrackerProps) {
+export function HabitTracker({ habits, month, today = null, isCurrentMonth, sortable, onSetLog, onEdit, onArchive, onReorder, onOrderCommit, onMove }: HabitTrackerProps) {
   const [anchor, setAnchor] = useState<Anchor | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
 
   const days = monthDays(month)
-  const today = dayKey(new Date())
   const overall = overallMonthProgress(habits, days)
   const anchorHabit = anchor ? habits.find((h) => h.id === anchor.habitId) : undefined
 
@@ -274,13 +276,17 @@ function HabitRow({
         const status = habit.logs[d.date] ?? null
         const isToday = d.date === today
         const beforeStart = d.date < habit.startDay
+        // Будущий день блокируется по серверному today: сервер на такую дату отвечает
+        // 400, и право кликать «на вчерашний игровой день» остаётся у пользователя.
+        const afterToday = today !== null && d.date > today
+        const inert = beforeStart || afterToday
         return (
           <td key={d.date} className={`border-b border-white/[0.04] p-0.5 text-center ${isToday ? 'bg-indigo-400/[0.07]' : ''}`}>
             <button
               type="button"
-              disabled={beforeStart}
+              disabled={inert}
               aria-label={`${habit.name}, ${d.day} ${d.weekday}`}
-              title={beforeStart ? 'Привычка создана позже' : undefined}
+              title={beforeStart ? 'Привычка создана позже' : afterToday ? 'Нельзя отметить будущий день' : undefined}
               onClick={(e) => {
                 const rect = e.currentTarget.getBoundingClientRect()
                 onOpenCell({ habitId: habit.id, date: d.date, x: rect.left, cellTop: rect.top, cellBottom: rect.bottom })
@@ -292,7 +298,7 @@ function HabitRow({
                     ? 'bg-amber-500/15 font-semibold text-amber-300 hover:bg-amber-500/25'
                     : status === 'missed'
                       ? 'bg-rose-500/15 font-semibold text-rose-300 hover:bg-rose-500/25'
-                      : beforeStart
+                      : inert
                         ? 'cursor-default text-slate-700'
                         : isToday
                           ? 'bg-slate-700/40 text-slate-500 ring-1 ring-inset ring-indigo-400/40 hover:text-slate-300'

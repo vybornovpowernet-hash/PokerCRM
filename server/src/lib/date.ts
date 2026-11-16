@@ -5,14 +5,19 @@ export function dayKey(d: Date = new Date()): string {
   return `${y}-${m}-${day}`
 }
 
-/** Converts a UTC timestamp (`YYYY-MM-DD HH:MM:SS`, SQLite style) to a local YYYY-MM-DD day key. */
-export function dayKeyFromUtcStamp(value: string): string | null {
+/** SQLite-штамп `YYYY-MM-DD HH:MM:SS` (UTC) как мгновенный момент; null, если разбор не удался. */
+function utcStampToDate(value: unknown): Date | null {
   if (typeof value !== 'string') return null
   const match = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/.exec(value.trim())
   if (!match) return null
   const d = new Date(`${match[1]}T${match[2]}Z`)
-  if (Number.isNaN(d.getTime())) return null
-  return dayKey(d)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+/** Converts a UTC timestamp (`YYYY-MM-DD HH:MM:SS`, SQLite style) to a local YYYY-MM-DD day key. */
+export function dayKeyFromUtcStamp(value: string): string | null {
+  const d = utcStampToDate(value)
+  return d ? dayKey(d) : null
 }
 
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -52,4 +57,21 @@ export function addDays(day: string, delta: number): string {
   const mm = String(dt.getUTCMonth() + 1).padStart(2, '0')
   const dd = String(dt.getUTCDate()).padStart(2, '0')
   return `${yy}-${mm}-${dd}`
+}
+
+/**
+ * Игровой день: календарный день с порогом `dayStartHour`. Пока местный час меньше
+ * порога, сутки ещё не перевернулись — вчерашний день. Порог 0 = календарный день.
+ * Чистая функция: ни часов, ни базы данных.
+ */
+export function logicalDayKey(d: Date = new Date(), dayStartHour = 0): string {
+  const key = dayKey(d)
+  if (dayStartHour <= 0) return key
+  return d.getHours() < dayStartHour ? addDays(key, -1) : key
+}
+
+/** Тот же игровой день из UTC-штампа (`YYYY-MM-DD HH:MM:SS`, как created_at). */
+export function logicalDayKeyFromUtcStamp(value: string, dayStartHour = 0): string | null {
+  const d = utcStampToDate(value)
+  return d ? logicalDayKey(d, dayStartHour) : null
 }

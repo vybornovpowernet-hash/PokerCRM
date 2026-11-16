@@ -1,8 +1,8 @@
 import { HttpError } from '../../lib/errors.js'
-import { addDays, currentMonthKey, dayKey, isValidDayKey, isValidMonthKey, monthEnd, monthStart } from '../../lib/date.js'
+import { addDays, currentMonthKey, isValidDayKey, isValidMonthKey, monthEnd, monthStart } from '../../lib/date.js'
 import { validateColor } from '../../lib/color.js'
 import { withTransaction } from '../../db.js'
-import { getDayStartHour } from '../settings.js'
+import { getLogicalDay } from '../logicalDay.js'
 import {
   clearHabitArchived,
   deleteLog,
@@ -17,7 +17,8 @@ import {
   updateHabitRow,
   upsertLog
 } from './db.js'
-import type { Habit, HabitHistoryItem, HabitLog, HabitStats, HabitStatus, HabitWithLogs } from './types.js'
+import type { Habit, HabitHistoryItem, HabitListResult, HabitLog, HabitStats, HabitStatus, HabitWithLogs } from './types.js'
+import type { LogicalDayContext } from '../logicalDay.js'
 
 const MAX_HABIT_NAME = 100
 
@@ -25,17 +26,6 @@ const MAX_HABIT_NAME = 100
 // character instead of two (or more) and cannot eat the user's budget.
 function charCount(value: string): number {
   return [...value].length
-}
-
-function getLogicalToday(): string {
-  const now = new Date()
-  const dayStartHour = getDayStartHour()
-  const key = dayKey(now)
-  if (dayStartHour <= 0) return key
-  if (now.getHours() < dayStartHour) {
-    return addDays(key, -1)
-  }
-  return key
 }
 
 function validateName(value: unknown): string {
@@ -67,11 +57,13 @@ function validateStatus(value: unknown): HabitStatus | null {
 // only ever renders habits that are currently tracked. Archived habits (and all
 // of their logs) stay reachable through the history view and `restoreHabit`.
 // A habit created after the month end is hidden from past months.
-export function listHabits(monthValue: unknown): HabitWithLogs[] {
+// `day` (порог + игровое «сегодня») читается один раз на вызов и проходит вглубь,
+// чтобы startDay не вычислял настройку на каждую строку.
+export function listHabits(monthValue: unknown, day: LogicalDayContext = getLogicalDay()): HabitWithLogs[] {
   const month = validateMonth(monthValue)
   const start = monthStart(month)
   const end = monthEnd(month)
-  const habits = listActiveHabitRows().filter((habit) => habit.startDay <= end)
+  const habits = listActiveHabitRows(day.dayStartHour).filter((habit) => habit.startDay <= end)
   const logs = listLogRowsForMonth(start, end)
   const byHabit = new Map<number, Record<string, HabitStatus>>()
   for (const log of logs) {
@@ -82,8 +74,14 @@ export function listHabits(monthValue: unknown): HabitWithLogs[] {
   return habits.map((habit) => ({ ...habit, logs: byHabit.get(habit.id) ?? {} }))
 }
 
+// Список месяца вместе с игровым «сегодня»: клиент подсвечивает и блокирует дни по нему.
+export function listHabitsWithToday(monthValue: unknown): HabitListResult {
+  const day = getLogicalDay()
+  return { habits: listHabits(monthValue, day), today: day.today }
+}
+
 export function createHabit(nameValue: unknown, colorValue: unknown): Habit {
-  return insertHabit(validateName(nameValue), validateColor(colorValue))
+  return insertHabit(validateName(nameValue), validateColor(colorValue), getLogicalDay().dayStartHour)
 }
 
 function validateOrderIds(value: unknown): number[] {
@@ -104,8 +102,9 @@ function validateOrderIds(value: unknown): number[] {
 // land where the habit used to sit.
 export function reorderHabits(input: unknown): Habit[] {
   const ids = validateOrderIds(input)
+  const day = getLogicalDay()
   withTransaction(() => {
-    const current = listActiveHabitRows()
+    const current = listActiveHabitRows(day.dayStartHour)
     const known = new Set(current.map((habit) => habit.id))
     for (const id of ids) {
       if (!known.has(id)) throw new HttpError(400, `ids: unknown habit ${id}`)
@@ -115,45 +114,50 @@ export function reorderHabits(input: unknown): Habit[] {
     const order = [...ids, ...rest]
     order.forEach((id, index) => setHabitSortOrder(id, index))
   })
-  return listActiveHabitRows()
+  return listActiveHabitRows(day.dayStartHour)
 }
 
 export function updateHabit(id: number, input: { name?: unknown; color?: unknown }): Habit {
-  const current = requireHabit(id)
+  const dayStartHour = getLogicalDay().dayStartHour
+  const current = requireHabit(id, dayStartHour)
   const name = input.name !== undefined ? validateName(input.name) : current.name
   const color = input.color !== undefined ? validateColor(input.color) : current.color
-  return updateHabitRow(id, name, color)
+  return updateHabitRow(id, name, color, dayStartHour)
 }
 
 export function setHabitLog(id: number, dateValue: unknown, statusValue: unknown): HabitLog | null {
-  const habit = requireHabit(id)
+  const day = getLogicalDay()
+  const habit = requireHabit(id, day.dayStartHour)
   if (habit.archivedAt !== null) throw new HttpError(400, 'Нельзя изменять логи архивированной привычки')
-  const day = validateDate(dateValue)
-  const today = getLogicalToday()
-  if (day > today) throw new HttpError(400, 'Нельзя отмечать привычку на будущую дату')
+  const date = validateDate(dateValue)
+  if (date > day.today) throw new HttpError(400, 'Нельзя отмечать привычку на будущую дату')
   const status = validateStatus(statusValue)
   if (status === null) {
-    deleteLog(id, day)
+    deleteLog(id, date)
     return null
   }
-  upsertLog(id, day, status)
-  return { date: day, status }
+  upsertLog(id, date, status)
+  return { date, status }
 }
 
+// Штамп архива — игровое «сегодня»: ночь после полуночи до порога всё ещё те же сутки.
 export function archiveHabit(id: number): Habit {
-  const habit = requireHabit(id)
+  const day = getLogicalDay()
+  const habit = requireHabit(id, day.dayStartHour)
   if (habit.archivedAt !== null) return habit
-  return stampHabitArchived(id, dayKey())
+  return stampHabitArchived(id, day.today, day.dayStartHour)
 }
 
 export function restoreHabit(id: number): Habit {
-  const habit = requireHabit(id)
+  const dayStartHour = getLogicalDay().dayStartHour
+  const habit = requireHabit(id, dayStartHour)
   if (habit.archivedAt === null) return habit
-  return clearHabitArchived(id)
+  return clearHabitArchived(id, dayStartHour)
 }
 
 export function listHabitHistory(): HabitHistoryItem[] {
-  return listArchivedHabitRows().map((habit) => {
+  const dayStartHour = getLogicalDay().dayStartHour
+  return listArchivedHabitRows(dayStartHour).map((habit) => {
     const logs: Record<string, HabitStatus> = {}
     for (const log of listLogRowsForHabit(habit.id)) logs[log.date] = log.status
     return { ...habit, logs, stats: computeStats(logs) }

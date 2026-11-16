@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initDb, resetDbForTests, setDbForTests, getDb } from '../src/db.js'
 import { HttpError } from '../src/lib/errors.js'
 import { dayKey } from '../src/lib/date.js'
+import { setDayStartHour } from '../src/services/settings.js'
 import { archiveHabit, createHabit, listHabitHistory, listHabits, reorderHabits, restoreHabit, setHabitLog, updateHabit } from '../src/services/habits/service.js'
 
 beforeEach(() => {
@@ -297,5 +298,80 @@ describe('habits service', () => {
     expect(item.logs).toEqual({ '2020-01-01': 'partial', '2020-01-02': 'done', '2020-01-03': 'missed', '2020-01-04': 'partial' })
     // done + partial at half weight: 1 + 2*0.5 of 4 → 50%; only the strict `done` keeps the streak
     expect(item.stats).toMatchObject({ done: 1, partial: 2, missed: 1, tracked: 4, completionRate: 50, longestDoneStreak: 1 })
+  })
+})
+
+// SQLite пишет created_at по собственным часам (datetime('now')), на fake timers он не реагирует,
+// поэтому «ночное» создание моделируется явным штампом: UTC-вид того же локального мгновения,
+// который поставил бы SQLite. Ожидания выводятся из того же мгновения — тест не зависит от пояса.
+function utcStampOfLocal(night: Date): string {
+  return `${night.toISOString().slice(0, 19).replace('T', ' ')}`
+}
+
+function withCreatedAt(id: number, night: Date): void {
+  getDb().prepare('UPDATE habits SET created_at = ? WHERE id = ?').run(utcStampOfLocal(night), id)
+}
+
+describe('habits and the logical game day (day_start_hour = 7)', () => {
+  const NIGHT = new Date(2026, 10, 14, 3, 30)
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(NIGHT)
+    setDayStartHour(7)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('a habit created before the threshold starts on the game day, not the calendar day', () => {
+    const habit = createHabit('Ночняя')
+    withCreatedAt(habit.id, NIGHT)
+
+    const [listed] = listHabits('2026-11')
+    expect(listed.id).toBe(habit.id)
+    expect(listed.startDay).toBe('2026-11-13')
+    expect(listHabits('2026-10')).toEqual([])
+  })
+
+  it('a habit created in the night onto the 1st still belongs to the finished month', () => {
+    const habit = createHabit('Ночь на первое')
+    withCreatedAt(habit.id, new Date(2026, 11, 1, 3, 30))
+
+    expect(listHabits('2026-11').map((h) => h.id)).toContain(habit.id)
+    const [listed] = listHabits('2026-11')
+    expect(listed.startDay).toBe('2026-11-30')
+  })
+
+  it('archives on the game day', () => {
+    const habit = createHabit('Медитация')
+    expect(archiveHabit(habit.id).archivedAt).toBe('2026-11-13')
+  })
+
+  it('accepts the game day and refuses the calendar today while the threshold hour has not come', () => {
+    const habit = createHabit('Медитация')
+
+    expect(setHabitLog(habit.id, '2026-11-13', 'done')).toEqual({ date: '2026-11-13', status: 'done' })
+    expect(setHabitLog(habit.id, '2026-11-12', 'done')).toEqual({ date: '2026-11-12', status: 'done' })
+    expect(() => setHabitLog(habit.id, '2026-11-14', 'done')).toThrow(HttpError)
+  })
+
+  it('opens the calendar day the moment the threshold hour arrives', () => {
+    setDayStartHour(7)
+    vi.setSystemTime(new Date(2026, 10, 14, 7, 0))
+    const habit = createHabit('Медитация')
+
+    expect(setHabitLog(habit.id, '2026-11-14', 'done')).toEqual({ date: '2026-11-14', status: 'done' })
+  })
+
+  it('with threshold 0 nothing moves: the game day is the calendar day', () => {
+    setDayStartHour(0)
+    const habit = createHabit('Медитация')
+
+    expect(setHabitLog(habit.id, '2026-11-14', 'done')).toEqual({ date: '2026-11-14', status: 'done' })
+    withCreatedAt(habit.id, NIGHT)
+    expect(listHabits('2026-11')[0].startDay).toBe('2026-11-14')
+    expect(archiveHabit(habit.id).archivedAt).toBe('2026-11-14')
   })
 })

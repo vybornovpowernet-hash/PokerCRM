@@ -1,6 +1,6 @@
 import { getDb } from '../../db.js'
 import { HttpError } from '../../lib/errors.js'
-import { dayKeyFromUtcStamp } from '../../lib/date.js'
+import { logicalDayKeyFromUtcStamp } from '../../lib/date.js'
 import type { Habit, HabitStatus } from './types.js'
 
 interface HabitRow {
@@ -18,23 +18,25 @@ interface HabitLogRow {
   status: HabitStatus
 }
 
-function mapHabit(r: HabitRow): Habit {
-  const startDay = dayKeyFromUtcStamp(r.created_at) ?? r.created_at.slice(0, 10)
+// `startDay` — игровой день создания: тот же порог сутки, что и у турниров. Порог приходит
+// параметром (читается один раз на запрос), чтобы список из сотен привычек не дёргал `settings`.
+function mapHabit(r: HabitRow, dayStartHour: number): Habit {
+  const startDay = logicalDayKeyFromUtcStamp(r.created_at, dayStartHour) ?? r.created_at.slice(0, 10)
   return { id: r.id, name: r.name, color: r.color, createdAt: r.created_at, startDay, archivedAt: r.archived_at, sortOrder: r.sort_order }
 }
 
-export function listActiveHabitRows(): Habit[] {
+export function listActiveHabitRows(dayStartHour: number): Habit[] {
   const rows = getDb()
     .prepare('SELECT * FROM habits WHERE archived_at IS NULL ORDER BY sort_order, id')
     .all() as unknown as HabitRow[]
-  return rows.map(mapHabit)
+  return rows.map((row) => mapHabit(row, dayStartHour))
 }
 
-export function listArchivedHabitRows(): Habit[] {
+export function listArchivedHabitRows(dayStartHour: number): Habit[] {
   const rows = getDb()
     .prepare('SELECT * FROM habits WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, name COLLATE NOCASE, id')
     .all() as unknown as HabitRow[]
-  return rows.map(mapHabit)
+  return rows.map((row) => mapHabit(row, dayStartHour))
 }
 
 export function listLogRowsForMonth(monthStartKey: string, monthEndKey: string): { habitId: number; date: string; status: HabitStatus }[] {
@@ -52,41 +54,41 @@ export function listLogRowsForHabit(habitId: number): { date: string; status: Ha
   return rows.map((r) => ({ date: r.date, status: r.status }))
 }
 
-export function getHabit(id: number): Habit | null {
+export function getHabit(id: number, dayStartHour: number): Habit | null {
   const row = getDb().prepare('SELECT * FROM habits WHERE id = ?').get(id) as unknown as HabitRow | undefined
-  return row ? mapHabit(row) : null
+  return row ? mapHabit(row, dayStartHour) : null
 }
 
-export function requireHabit(id: number): Habit {
-  const habit = getHabit(id)
+export function requireHabit(id: number, dayStartHour: number): Habit {
+  const habit = getHabit(id, dayStartHour)
   if (!habit) throw new HttpError(404, 'Habit not found')
   return habit
 }
 
-export function insertHabit(name: string, color: string): Habit {
+export function insertHabit(name: string, color: string, dayStartHour: number): Habit {
   const info = getDb()
     .prepare('INSERT INTO habits (name, color, sort_order) VALUES (?, ?, (SELECT COALESCE(MIN(sort_order), 0) - 1 FROM habits))')
     .run(name, color)
-  return requireHabit(Number(info.lastInsertRowid))
+  return requireHabit(Number(info.lastInsertRowid), dayStartHour)
 }
 
 export function setHabitSortOrder(id: number, sortOrder: number): void {
   getDb().prepare('UPDATE habits SET sort_order = ? WHERE id = ?').run(sortOrder, id)
 }
 
-export function updateHabitRow(id: number, name: string, color: string): Habit {
+export function updateHabitRow(id: number, name: string, color: string, dayStartHour: number): Habit {
   getDb().prepare('UPDATE habits SET name = ?, color = ? WHERE id = ?').run(name, color, id)
-  return requireHabit(id)
+  return requireHabit(id, dayStartHour)
 }
 
-export function stampHabitArchived(id: number, archivedAt: string): Habit {
+export function stampHabitArchived(id: number, archivedAt: string, dayStartHour: number): Habit {
   getDb().prepare('UPDATE habits SET archived_at = ? WHERE id = ?').run(archivedAt, id)
-  return requireHabit(id)
+  return requireHabit(id, dayStartHour)
 }
 
-export function clearHabitArchived(id: number): Habit {
+export function clearHabitArchived(id: number, dayStartHour: number): Habit {
   getDb().prepare('UPDATE habits SET archived_at = NULL WHERE id = ?').run(id)
-  return requireHabit(id)
+  return requireHabit(id, dayStartHour)
 }
 
 export function upsertLog(habitId: number, date: string, status: HabitStatus): void {
