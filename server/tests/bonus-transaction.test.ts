@@ -125,7 +125,55 @@ describe('bonus: balance and external flows', () => {
     expect(profit.bonusUsd).toBe(50_00)
   })
 
-  it('a bonus-only day becomes a session row (the money is explained, not phantom)', () => {
+  // Решение пользователя 2026-11-17: день, где был ТОЛЬКО бонус (ни турниров, ни казино),
+  // игровой сессией не считается. Но начисление обязано остаться в математике: его
+  // auto-запись баланса — то, от чего меряется дельта следующей реальной сессии.
+  it('a bonus-only automatic day is not a session row', () => {
+    const id = usdRoom()
+    upsertBalance(id, '2026-11-01', 100_00, 'USD')
+    createTransaction({ roomId: id, type: 'bonus', amount: 50_00, currency: 'USD', date: '2026-11-05' })
+
+    expect(sessionsInRange('2026-11-02', '2026-11-10')).toEqual([])
+    // начисление при этом никуда не делось: оно и в кассе, и в цепочке балансов
+    expect(listTransactions({ roomId: id, type: 'bonus' }).map((t) => t.amount)).toEqual([50_00])
+    expect(getBalance(id, '2026-11-05')).toMatchObject({ source: 'auto', amount: 150_00 })
+    // и спрятанный день не начинает сигналить: у auto-дня сверка по-прежнему «не с чем»
+    const hidden = reconcileDay(id, '2026-11-05')
+    expect(hidden.flagged).toBe(false)
+    expect(hidden.blank).toContain('нет ручного баланса')
+  })
+
+  it('the hidden bonus day does not leak into the next real session as a phantom remainder', () => {
+    const id = usdRoom()
+    upsertBalance(id, '2026-11-01', 100_00, 'USD')
+    createTransaction({ roomId: id, type: 'bonus', amount: 50_00, currency: 'USD', date: '2026-11-05' })
+    addTournament(id, '2026-11-08', 20_00, 50_00)
+    upsertBalance(id, '2026-11-08', 180_00, 'USD')
+
+    const days = sessionsInRange('2026-11-02', '2026-11-10')
+    expect(days.map((d) => d.date)).toEqual(['2026-11-08'])
+    const session = days[0]?.rooms[0]
+    // дельта 180 − 150 (auto-запись бонусного дня) = 30 = ровно турнирный профит
+    expect(session).toMatchObject({ profitUsd: 30_00, bonusUsd: 0, pokerProfitUsd: 30_00 })
+    const reconcile = reconcileDay(id, '2026-11-08')
+    expect(reconcile).toMatchObject({ sessionProfitUsd: 30_00, tournamentProfitUsd: 30_00, bonusUsd: 0, remainderUsd: 0 })
+    expect(reconcile.flagged).toBe(false)
+  })
+
+  it('numbers of the real session do not depend on where the range starts', () => {
+    const id = usdRoom()
+    upsertBalance(id, '2026-11-01', 100_00, 'USD')
+    createTransaction({ roomId: id, type: 'bonus', amount: 50_00, currency: 'USD', date: '2026-11-05' })
+    addTournament(id, '2026-11-08', 20_00, 50_00)
+    upsertBalance(id, '2026-11-08', 180_00, 'USD')
+
+    const wide = sessionsInRange('2026-11-02', '2026-11-10')[0]?.rooms[0]
+    const tight = sessionsInRange('2026-11-08', '2026-11-08')[0]?.rooms[0]
+    expect(tight).toMatchObject({ profitUsd: wide?.profitUsd ?? NaN, bonusUsd: wide?.bonusUsd ?? NaN })
+    expect(tight?.profitUsd).toBe(30_00)
+  })
+
+  it('a manual snapshot on a bonus day keeps that day visible (the anchor is not hidden)', () => {
     const id = usdRoom()
     createTransaction({ roomId: id, type: 'bonus', amount: 50_00, currency: 'USD', date: '2026-11-10' })
     upsertBalance(id, '2026-11-09', 100_00, 'USD')
@@ -134,6 +182,30 @@ describe('bonus: balance and external flows', () => {
     const days = sessionsInRange('2026-11-10', '2026-11-10')
     expect(days).toHaveLength(1)
     expect(days[0]?.rooms[0]).toMatchObject({ bonusUsd: 50_00, pokerProfitUsd: 0 })
+  })
+
+  it('a bonus on a real session day stays its own term of the same row', () => {
+    const id = usdRoom()
+    addTournament(id, '2026-11-10', 50_00, 100_00)
+    createTransaction({ roomId: id, type: 'bonus', amount: 50_00, currency: 'USD', date: '2026-11-10' })
+    upsertBalance(id, '2026-11-09', 100_00, 'USD')
+    upsertBalance(id, '2026-11-10', 200_00, 'USD')
+
+    const day = sessionsInRange('2026-11-10', '2026-11-10')[0]
+    expect(day?.rooms[0]).toMatchObject({ profitUsd: 100_00, bonusUsd: 50_00, pokerProfitUsd: 50_00 })
+    expect(day?.totalUsd).toBe(50_00)
+  })
+
+  it('a casino-only day is still a session row (only the bonus lost that right)', () => {
+    const id = usdRoom()
+    // порядок естественный: сначала якорь, потом операция — только тогда auto-цепочка
+    // строится вокруг якоря (`upsertBalance` пересборку не вызывает)
+    upsertBalance(id, '2026-11-09', 100_00, 'USD')
+    createTransaction({ roomId: id, type: 'casino', amount: -20_00, currency: 'USD', date: '2026-11-10' })
+
+    const days = sessionsInRange('2026-11-10', '2026-11-10')
+    expect(days.map((d) => d.date)).toEqual(['2026-11-10'])
+    expect(days[0]?.rooms[0]).toMatchObject({ source: 'auto', casinoUsd: -20_00, bonusUsd: 0, profitUsd: -20_00, pokerProfitUsd: 0 })
   })
 })
 

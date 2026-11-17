@@ -152,18 +152,21 @@ export function sessionRoomProfit(roomId: number, date: string): RoomProfit | nu
 }
 
 /** Day profit per room: profit = delta_balance − (in − out), all converted to USD.
- *  Casino P&L is folded into `profitUsd` (reconcile input) and broken out as
- *  `casinoUsd` / `pokerProfitUsd` (the pure-poker figure the UI shows).
+ *  Casino P&L and room bonuses are folded into `profitUsd` (reconcile input) and
+ *  broken out as `casinoUsd` / `bonusUsd` / `pokerProfitUsd` (the pure-poker figure the UI shows).
  *
  * A room is part of a session day only when it is actually a gaming day:
  *  - a MANUAL balance entry exists (source='manual'), or
  *  - tournaments were played that day, or
- *  - a casino transaction happened that day, or
- *  - a room bonus (rakeback, cashback) was credited that day.
+ *  - a casino transaction happened that day.
+ * A room bonus (rakeback, cashback) does NOT make a day a session: it is money the
+ * room paid out, not play. Hiding such a day is safe because `lastByRoom` below
+ * advances before the day is skipped — the carry-forward chain still runs through
+ * it, so the next real session measures its delta from the bonus day's own entry
+ * and `R = S − T − X − B` stays explained instead of surfacing −B as a phantom gap.
+ * A manual snapshot on a bonus day keeps that day visible: it is an anchor.
  * Auto-derived entries created by transactions alone do NOT make a session row:
- * a deposit/withdraw/transfer is bookkeeping, not play. A bonus is not play
- * either, but it IS money the day earned, so its day gets a row of its own —
- * otherwise the credit would silently land in the delta of the next session.
+ * a deposit/withdraw/transfer is bookkeeping, not play.
  *
  * Balances, tournaments and fund flows are fetched once for the whole range
  * (no per-day/per-room N+1); rate resolution is memoized for the pass.
@@ -188,12 +191,6 @@ export function sessionsInRange(dateFrom: string, dateTo: string): SessionDay[] 
         .all(dateFrom, dateTo) as unknown as { room_id: number; date: string }[]).map((r) => `${r.room_id}:${r.date}`)
     )
 
-    for (const r of getDb()
-      .prepare('SELECT DISTINCT room_id, date FROM tournaments WHERE date >= ? AND date <= ?')
-      .all(dateFrom, dateTo) as unknown as { room_id: number; date: string }[]) {
-      gaming.add(`${r.room_id}:${r.date}`)
-    }
-
     const flows = flowsUsdRange(dateFrom, dateTo)
 
     const tournamentRowsByKey = new Map<string, TournamentProfitRow[]>()
@@ -211,18 +208,22 @@ export function sessionsInRange(dateFrom: string, dateTo: string): SessionDay[] 
 
     const casinoByKey = new Map<string, number>()
     const bonusByKey = new Map<string, number>()
-    // Один проход по знаковым строкам: и казино, и бонус делают день игровым
-    // (иначе начисление «растворилось» бы в дельте следующего дня), и считают
-    // отдельные члены сверки.
+    // Один проход по знаковым строкам дня. Игровым день делают КАЗИНО (и турниры),
+    // но не бонус: рейкбек — не игра. Это безопасно именно потому, что `lastByRoom`
+    // в цикле ниже сдвигается ДО проверки `gaming`: carry-forward continues течь через
+    // спрятанный бонусный день, и дельта следующей реальной сессии меряется от его же
+    // auto-записи. Убрать это свойство означало бы выдать остаток −B фантомным окном.
     for (const row of getDb()
       .prepare("SELECT room_id, date, type, amount, currency FROM transactions WHERE type IN ('casino', 'bonus') AND date >= ? AND date <= ?")
       .all(dateFrom, dateTo) as unknown as { room_id: number; date: string; type: SignedType; amount: number; currency: string }[]) {
       const key = `${row.room_id}:${row.date}`
-      gaming.add(key)
       const usd = convertToUsd(row.amount, row.currency, row.date, row.room_id)
-      if (usd === null) continue
-      const bucket = row.type === 'casino' ? casinoByKey : bonusByKey
-      bucket.set(key, (bucket.get(key) ?? 0) + usd)
+      if (row.type === 'casino') {
+        gaming.add(key)
+        if (usd !== null) casinoByKey.set(key, (casinoByKey.get(key) ?? 0) + usd)
+        continue
+      }
+      if (usd !== null) bonusByKey.set(key, (bonusByKey.get(key) ?? 0) + usd)
     }
 
     const beforeByRoom = new Map<number, BalanceEntry | null>()
@@ -234,6 +235,8 @@ export function sessionsInRange(dateFrom: string, dateTo: string): SessionDay[] 
     const lastByRoom = new Map<number, BalanceEntry>()
     for (const entry of entries) {
       const prev = lastByRoom.get(entry.roomId) ?? beforeByRoom.get(entry.roomId) ?? null
+      // Порядок важен: carry помечается ДО пропуска дня. Именно поэтому спрятанный
+      // бонусный день не «растворяет» начисление — следующая сессия меряется от него.
       lastByRoom.set(entry.roomId, entry)
       if (entry.source !== 'manual' && !gaming.has(`${entry.roomId}:${entry.date}`)) continue
       const flow = flows.get(`${entry.roomId}:${entry.date}`) ?? EMPTY_FLOW
