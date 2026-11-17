@@ -180,7 +180,7 @@ export function flowsUsdRange(dateFrom: string, dateTo: string, roomIds?: number
   const plain = db
     .prepare(
       `SELECT room_id, date, amount, fee, currency, direction FROM transactions
-       WHERE date >= ? AND date <= ? AND type NOT IN ('transfer', 'casino')${roomFilter}`
+       WHERE date >= ? AND date <= ? AND type NOT IN ('transfer', 'casino', 'bonus')${roomFilter}`
     )
     .all(...rangeParams, ...(roomIds ?? [])) as unknown as {
     room_id: number
@@ -282,7 +282,7 @@ interface TxRow {
   fee: number
   currency: string
   direction: 'in' | 'out'
-  type: 'deposit' | 'withdraw' | 'transfer' | 'casino'
+  type: 'deposit' | 'withdraw' | 'transfer' | 'casino' | 'bonus'
   destination_room_id: number | null
   dest_amount: number | null
   destination_currency: string | null
@@ -292,9 +292,9 @@ interface TxRow {
  * Balance effect of one transaction on a room, in `targetCurrency`, for the
  * given day. The transfer receiving leg credits the exact `dest_amount` (in
  * the destination room's cash currency) when present, otherwise `amount` (in
- * the sender's currency) converted by the day's rate. Casino is a signed
- * gaming result added verbatim; every other row moves `amount` (in) or
- * `-(amount + fee)` (out).
+ * the sender's currency) converted by the day's rate. A signed row (casino
+ * result, bonus credit) is added verbatim with its own sign; every other row
+ * moves `amount` (in) or `-(amount + fee)` (out).
  */
 function transactionEffect(
   t: TxRow,
@@ -308,7 +308,7 @@ function transactionEffect(
   }
   const units = recipientLeg
     ? t.amount
-    : t.type === 'casino'
+    : t.type === 'casino' || t.type === 'bonus'
       ? t.amount
       : t.direction === 'in'
         ? t.amount

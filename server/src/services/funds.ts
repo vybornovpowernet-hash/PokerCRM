@@ -6,8 +6,21 @@ import { recomputeRoomBalances, shiftManualBalanceOnDay } from './balances.js'
 import { convertCross, convertToUsd } from './rates/convert.js'
 import type { Room } from './rooms.js'
 
-export type TransactionType = 'deposit' | 'withdraw' | 'transfer' | 'casino'
+export type TransactionType = 'deposit' | 'withdraw' | 'transfer' | 'casino' | 'bonus'
 export type Direction = 'in' | 'out'
+
+/**
+ * Знаковые типы: сумма может быть отрицательной, а `direction` выводится из её
+ * знака — арифметика баланса всегда берёт знак из `amount`. У обоих типов нет
+ * внешней природы: `casino` — результат игры, `bonus` — начисление рума
+ * (рейкбек, кэшбэк), и оба исключены из учётных потоков, чтобы
+ * `profit = delta − (in − out)` не считал их депозитом или выводом.
+ */
+const SIGNED_TYPES: readonly TransactionType[] = ['casino', 'bonus']
+
+function isSignedType(type: TransactionType): boolean {
+  return SIGNED_TYPES.includes(type)
+}
 
 /**
  * Why a day-closing write-off attributed a residual. The ledger row is always a
@@ -19,7 +32,7 @@ export type WriteoffReason = 'casino' | 'fx' | 'other'
 
 export const WRITEOFF_REASONS: readonly WriteoffReason[] = ['casino', 'fx', 'other']
 
-const TRANSACTION_TYPES: TransactionType[] = ['deposit', 'withdraw', 'transfer', 'casino']
+const TRANSACTION_TYPES: TransactionType[] = ['deposit', 'withdraw', 'transfer', 'casino', 'bonus']
 const DIRECTIONS: Direction[] = ['in', 'out']
 
 export function validateWriteoffReason(value: unknown): WriteoffReason {
@@ -288,8 +301,9 @@ export function transactionsTotals(
       continue
     }
     flowCountedRows += 1
-    // casino is a signed gaming result; deposits and withdrawals follow the direction
-    flow += t.type === 'casino' ? t.amountUsd : t.direction === 'in' ? t.amountUsd : -t.amountUsd
+    // a signed row (casino result, bonus credit) already carries its sign; deposits
+    // and withdrawals follow the direction
+    flow += isSignedType(t.type) ? t.amountUsd : t.direction === 'in' ? t.amountUsd : -t.amountUsd
   }
 
   const flowScope: FlowScope = typeFilter === undefined ? 'all_without_transfers' : typeFilter === 'transfer' ? 'none' : 'type'
@@ -329,17 +343,17 @@ export interface ValidatedTransaction {
 }
 
 export function validateTransaction(input: TransactionInput): ValidatedTransaction {
-  if (!TRANSACTION_TYPES.includes(input.type)) throw new HttpError(400, 'type: must be deposit, withdraw, transfer or casino')
-  const isCasino = input.type === 'casino'
-  if (!Number.isInteger(input.amount) || (isCasino ? input.amount === 0 : input.amount < 1)) {
+  if (!TRANSACTION_TYPES.includes(input.type)) throw new HttpError(400, 'type: must be deposit, withdraw, transfer, casino or bonus')
+  const signed = isSignedType(input.type)
+  if (!Number.isInteger(input.amount) || (signed ? input.amount === 0 : input.amount < 1)) {
     throw new HttpError(
       400,
-      isCasino ? 'amount: must be a non-zero integer (min units)' : 'amount: must be a positive integer (min units)'
+      signed ? 'amount: must be a non-zero integer (min units)' : 'amount: must be a positive integer (min units)'
     )
   }
   const fee = input.fee ?? 0
   if (!Number.isInteger(fee) || fee < 0) throw new HttpError(400, 'fee: must be a non-negative integer (min units)')
-  if (isCasino && fee !== 0) throw new HttpError(400, 'fee: must be 0 for casino')
+  if (signed && fee !== 0) throw new HttpError(400, `fee: must be 0 for ${input.type}`)
   const currency = validateCurrency(input.currency, 'currency')
   // the exact credited amount is a transfer-only fact: it is stored in the
   // receiver's cash currency and never derived from the sender's side
@@ -352,9 +366,10 @@ export function validateTransaction(input: TransactionInput): ValidatedTransacti
   }
   // transfers always leave the sender room: direction is derived, never read
   // from the client (the "Куда" dropdown replaces the direction picker)
-  // casino is a signed result: a win credits the room (in), a loss debits it (out)
+  // a signed row (casino result, bonus credit) carries its direction in the sign:
+  // win/credit is in, loss/clawback is out
   const direction: Direction =
-    input.type === 'transfer' ? 'out' : isCasino ? (input.amount > 0 ? 'in' : 'out') : (input.direction ?? 'out')
+    input.type === 'transfer' ? 'out' : signed ? (input.amount > 0 ? 'in' : 'out') : (input.direction ?? 'out')
   if (!DIRECTIONS.includes(direction)) throw new HttpError(400, 'direction: must be "in" or "out"')
   if (input.type === 'deposit' && direction !== 'in') throw new HttpError(400, 'deposit must have direction "in"')
   if (input.type === 'withdraw' && direction !== 'out') throw new HttpError(400, 'withdraw must have direction "out"')
@@ -406,22 +421,21 @@ interface TransactionShape {
 
 /**
  * Balance effect of a transaction on each moved balance, in the leg's OWN
- * currency. Sender/source: casino is a signed result, a transfer pays
- * `amount + fee`, otherwise `in` credits `amount` and `out` debits
- * `amount + fee`. A transfer's receiving room is credited `destAmount` in the
- * destination room's cash currency when the user recorded the exact figure;
- * otherwise `amount` in the sender's currency (converted at the day's rate,
- * the legacy fallback).
+ * currency. Sender/source: a signed row (casino result, bonus credit) is its own
+ * amount, a transfer pays `amount + fee`, otherwise `in` credits `amount` and
+ * `out` debits `amount + fee`. A transfer's receiving room is credited
+ * `destAmount` in the destination room's cash currency when the user recorded the
+ * exact figure; otherwise `amount` in the sender's currency (converted at the
+ * day's rate, the legacy fallback).
  */
 function legsOf(tx: TransactionShape): { roomId: number; units: number; currency: string }[] {
-  const sourceUnits =
-    tx.type === 'casino'
-      ? tx.amount
-      : tx.type === 'transfer'
-        ? -(tx.amount + tx.fee)
-        : tx.direction === 'in'
-          ? tx.amount
-          : -(tx.amount + tx.fee)
+  const sourceUnits = isSignedType(tx.type)
+    ? tx.amount
+    : tx.type === 'transfer'
+      ? -(tx.amount + tx.fee)
+      : tx.direction === 'in'
+        ? tx.amount
+        : -(tx.amount + tx.fee)
   const legs = [{ roomId: tx.roomId, units: sourceUnits, currency: tx.currency }]
   if (tx.type === 'transfer' && tx.destinationRoomId != null) {
     if (tx.destAmount !== null && tx.destinationCurrency !== null) {
@@ -671,6 +685,12 @@ export function listTransactions(filters: TransactionFilters = {}): Transaction[
  * incoming movements the fee is assumed paid outside the bankroll.
  * profit = delta_balance − (in − out), so these flows never affect profit.
  *
+ * `transfer` and the two signed P&L types (`casino`, `bonus`) are excluded here:
+ * a transfer is the user's own money between their own rooms (both legs cancel),
+ * while a casino result and a room bonus (rakeback, cashback) are earnings, not
+ * money brought in from outside. Counting a bonus as an `in` flow would subtract
+ * it from the profit and report a win as a zero-profit day.
+ *
  * Transfers between own rooms produce two flow legs: the sender pays
  * `amount + fee` in its own currency, the receiver gets its exact `dest_amount`
  * (v33) in its cash currency, or — for legacy rows without it — `amount`
@@ -685,7 +705,7 @@ export function flowTotals(dateFrom: string, dateTo: string): FlowTotal[] {
       `SELECT room_id, currency, direction,
               SUM(CASE WHEN direction = 'in' THEN amount ELSE amount + fee END) AS total
        FROM transactions
-       WHERE date >= ? AND date <= ? AND type NOT IN ('transfer', 'casino')
+       WHERE date >= ? AND date <= ? AND type NOT IN ('transfer', 'casino', 'bonus')
        GROUP BY room_id, currency, direction`
     )
     .all(dateFrom, dateTo) as unknown as { room_id: number; currency: string; direction: Direction; total: number }[]

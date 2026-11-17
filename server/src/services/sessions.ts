@@ -21,20 +21,26 @@ export interface RoomProfit {
   delta: number | null
   flowInUsd: number
   flowOutUsd: number
-  /** Balance-based session result: `delta − (in − out)`. Casino P&L is part
-   *  of it (a casino row shifts the balance and is not an external flow). Kept
-   *  as the reconcile input (`R = S − T − X`) — do not repurpose it. */
+  /** Balance-based session result: `delta − (in − out)`. Casino P&L and room
+   *  bonuses are part of it (both shift the balance and are not external flows).
+   *  Kept as the reconcile input (`R = S − T − X − B`) — do not repurpose it. */
   profitUsd: number | null
   /** Signed casino P&L of the day in USD (0 when none) — the part of the
    *  balance delta that is gaming, not poker, shown for reference in «Сессии». */
   casinoUsd: number
+  /** Signed room bonuses of the day in USD (0 when none): rakeback, cashback,
+   *  promotional credits. Money the room itself paid out, so it is neither a
+   *  deposit from outside nor a tournament result — it leaves `pokerProfitUsd`
+   *  and leaves the reconcile remainder explained, in its own line. */
+  bonusUsd: number
   /** The residual the user explicitly accepted (`reconcile_acks`) and that still
-   *  matches `profitUsd − tournaments − casinoUsd`, in USD (0 when none). It is
-   *  forgiven, not spent: excluded from `pokerProfitUsd`, never a casino row. */
+   *  matches `profitUsd − tournaments − casinoUsd − bonusUsd`, in USD (0 when none).
+   *  It is forgiven, not spent: excluded from `pokerProfitUsd`, never a casino row. */
   acknowledgedUsd: number
-  /** Pure poker result: `profitUsd − casinoUsd − acknowledgedUsd`. What the
-   *  «Профит» column and the day/KPI totals display, so chips never masquerade
-   *  as poker play and an accepted residual never shows up as a phantom loss. */
+  /** Pure poker result: `profitUsd − casinoUsd − bonusUsd − acknowledgedUsd`. What
+   *  the «Профит» column and the day/KPI totals display, so chips never masquerade
+   *  as poker play, a room bonus never looks like a won tournament, and an
+   *  accepted residual never shows up as a phantom loss. */
   pokerProfitUsd: number | null
   convertible: boolean
 }
@@ -52,12 +58,13 @@ const EMPTY_FLOW: CashFlow = { inUsd: 0, outUsd: 0, convertible: true }
  *
  *  `tournamentUsd` and `ackRemainder` let the acknowledgment be re-validated
  *  here: the stored residual is only subtracted when it still equals
- *  `S − T − X`, exactly the same comparison `reconcileFromSession` makes. */
+ *  `S − T − X − B`, exactly the same comparison `reconcileFromSession` makes. */
 function buildRoomProfit(
   entry: BalanceEntry,
   prev: BalanceEntry | null,
   flows: CashFlow,
   casinoUsd: number,
+  bonusUsd: number,
   tournamentUsd: number,
   ackRemainder: number | null
 ): RoomProfit {
@@ -75,7 +82,7 @@ function buildRoomProfit(
   const deltaUsd = delta === null ? null : convertToUsd(delta, entry.currency, entry.date, entry.roomId)
   const convertible = deltaUsd !== null && flows.convertible
   const profitUsd = convertible ? (deltaUsd as number) - (flows.inUsd - flows.outUsd) : null
-  const remainderUsd = profitUsd !== null ? profitUsd - tournamentUsd - casinoUsd : null
+  const remainderUsd = profitUsd !== null ? profitUsd - tournamentUsd - casinoUsd - bonusUsd : null
   const acknowledgedUsd = remainderUsd !== null && ackRemainder !== null && ackRemainder === remainderUsd ? remainderUsd : 0
   return {
     roomId: entry.roomId,
@@ -87,17 +94,24 @@ function buildRoomProfit(
     flowOutUsd: flows.outUsd,
     profitUsd,
     casinoUsd,
+    bonusUsd,
     acknowledgedUsd,
-    pokerProfitUsd: profitUsd !== null ? profitUsd - casinoUsd - acknowledgedUsd : null,
+    pokerProfitUsd: profitUsd !== null ? profitUsd - casinoUsd - bonusUsd - acknowledgedUsd : null,
     convertible
   }
 }
 
-/** Signed casino P&L of a room on a day, converted to USD with that day's rate. */
-function casinoUsdFor(roomId: number, date: string): number {
+type SignedType = 'casino' | 'bonus'
+
+/**
+ * Знаковые строки рума за день, в USD: `casino` — результат игры, `bonus` —
+ * начисление рума (рейкбек, кэшбэк). Оба двигают баланс и оба не являются
+ * внешним потоком, поэтому в сверке дня вычитаются отдельными членами.
+ */
+function signedUsdFor(type: SignedType, roomId: number, date: string): number {
   const rows = getDb()
-    .prepare("SELECT amount, currency FROM transactions WHERE type = 'casino' AND room_id = ? AND date = ?")
-    .all(roomId, date) as unknown as { amount: number; currency: string }[]
+    .prepare('SELECT amount, currency FROM transactions WHERE type = ? AND room_id = ? AND date = ?')
+    .all(type, roomId, date) as unknown as { amount: number; currency: string }[]
   let total = 0
   for (const row of rows) {
     const usd = convertToUsd(row.amount, row.currency, date, roomId)
@@ -106,7 +120,7 @@ function casinoUsdFor(roomId: number, date: string): number {
   return total
 }
 
-/** Tournament profit of a room on a day, in USD — the `T` of `R = S − T − X`. */
+/** Tournament profit of a room on a day, in USD — the `T` of `R = S − T − X − B`. */
 function tournamentProfitFor(roomId: number, date: string): number {
   const rows = getDb()
     .prepare('SELECT room_id, date, buyin, result, currency FROM tournaments WHERE room_id = ? AND date = ?')
@@ -123,7 +137,8 @@ export function computeRoomProfit(entry: BalanceEntry): RoomProfit {
     entry,
     prev,
     roomFlowsUsd(entry.roomId, entry.date),
-    casinoUsdFor(entry.roomId, entry.date),
+    signedUsdFor('casino', entry.roomId, entry.date),
+    signedUsdFor('bonus', entry.roomId, entry.date),
     tournamentProfitFor(entry.roomId, entry.date),
     getAck(entry.roomId, entry.date)?.remainderUsd ?? null
   )
@@ -143,9 +158,12 @@ export function sessionRoomProfit(roomId: number, date: string): RoomProfit | nu
  * A room is part of a session day only when it is actually a gaming day:
  *  - a MANUAL balance entry exists (source='manual'), or
  *  - tournaments were played that day, or
- *  - a casino transaction happened that day.
+ *  - a casino transaction happened that day, or
+ *  - a room bonus (rakeback, cashback) was credited that day.
  * Auto-derived entries created by transactions alone do NOT make a session row:
- * a deposit/withdraw/transfer is bookkeeping, not play.
+ * a deposit/withdraw/transfer is bookkeeping, not play. A bonus is not play
+ * either, but it IS money the day earned, so its day gets a row of its own —
+ * otherwise the credit would silently land in the delta of the next session.
  *
  * Balances, tournaments and fund flows are fetched once for the whole range
  * (no per-day/per-room N+1); rate resolution is memoized for the pass.
@@ -192,14 +210,19 @@ export function sessionsInRange(dateFrom: string, dateTo: string): SessionDay[] 
     const acks = acksInRange(dateFrom, dateTo)
 
     const casinoByKey = new Map<string, number>()
+    const bonusByKey = new Map<string, number>()
+    // Один проход по знаковым строкам: и казино, и бонус делают день игровым
+    // (иначе начисление «растворилось» бы в дельте следующего дня), и считают
+    // отдельные члены сверки.
     for (const row of getDb()
-      .prepare("SELECT room_id, date, amount, currency FROM transactions WHERE type = 'casino' AND date >= ? AND date <= ?")
-      .all(dateFrom, dateTo) as unknown as { room_id: number; date: string; amount: number; currency: string }[]) {
+      .prepare("SELECT room_id, date, type, amount, currency FROM transactions WHERE type IN ('casino', 'bonus') AND date >= ? AND date <= ?")
+      .all(dateFrom, dateTo) as unknown as { room_id: number; date: string; type: SignedType; amount: number; currency: string }[]) {
       const key = `${row.room_id}:${row.date}`
       gaming.add(key)
       const usd = convertToUsd(row.amount, row.currency, row.date, row.room_id)
       if (usd === null) continue
-      casinoByKey.set(key, (casinoByKey.get(key) ?? 0) + usd)
+      const bucket = row.type === 'casino' ? casinoByKey : bonusByKey
+      bucket.set(key, (bucket.get(key) ?? 0) + usd)
     }
 
     const beforeByRoom = new Map<number, BalanceEntry | null>()
@@ -220,6 +243,7 @@ export function sessionsInRange(dateFrom: string, dateTo: string): SessionDay[] 
         prev,
         flow,
         casinoByKey.get(key) ?? 0,
+        bonusByKey.get(key) ?? 0,
         tournamentProfitUsd(tournamentRowsByKey.get(key) ?? []),
         acks.get(key) ?? null
       )

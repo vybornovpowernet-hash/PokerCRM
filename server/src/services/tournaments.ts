@@ -71,6 +71,9 @@ export interface DayReconcile {
   sessionProfitUsd: number | null
   tournamentProfitUsd: number
   casinoUsd: number
+  /** Signed room bonuses of the day (rakeback, cashback) in USD: explained money,
+   *  but not a tournament result — its own term of `R = S − T − X − B`. */
+  bonusUsd: number
   remainderUsd: number | null
   discrepancyPct: number | null
   flagged: boolean
@@ -308,11 +311,15 @@ export function listDayTournaments(roomId: number, date: string): TournamentRow[
   return rows.map(mapRow)
 }
 
-/** Explicit signed casino transactions of a room on a day, in USD. */
-function casinoTransactionsUsd(roomId: number, date: string): number {
+/**
+ * Знаковые строки рума за день, в USD: `casino` — результат игры, `bonus` —
+ * начисление рума. Оба двигают баланс и оба не входят во внешние потоки, поэтому
+ * в сверке дня у них свои члены: `R = S − T − X − B`.
+ */
+function signedTransactionsUsd(type: 'casino' | 'bonus', roomId: number, date: string): number {
   const transactions = getDb()
-    .prepare("SELECT amount, currency FROM transactions WHERE type = 'casino' AND room_id = ? AND date = ?")
-    .all(roomId, date) as unknown as { amount: number; currency: string }[]
+    .prepare('SELECT amount, currency FROM transactions WHERE type = ? AND room_id = ? AND date = ?')
+    .all(type, roomId, date) as unknown as { amount: number; currency: string }[]
   let total = 0
   for (const row of transactions) {
     const usd = convertToUsd(row.amount, row.currency, date, roomId)
@@ -323,24 +330,28 @@ function casinoTransactionsUsd(roomId: number, date: string): number {
 
 /**
  * Compare the balance-derived session profit against a set of tournament rows
- * (plus casino P&L). Flag when |remainder| exceeds 5% of the larger.
+ * (plus casino P&L and room bonuses). Flag when |remainder| exceeds 5% of the larger.
  *
  * A discrepancy is only meaningful against a balance the user actually
  * measured. An 'auto' entry is an interpolated carry-forward that replays
- * deposit/withdraw/casino but NOT tournament results, so `S = X` and the
- * residual collapses to `R ≡ −T` — a 100% phantom that no write-off can
+ * deposit/withdraw/casino/bonus but NOT tournament results, so `S = X + B` and
+ * the residual collapses to `R ≡ −T` — a 100% phantom that no write-off can
  * honestly close (there is no measured balance to explain). Such a day reports
  * no remainder and no flag; it becomes comparable the moment a manual balance
  * is recorded for it (`upsertBalance` flips the entry to 'manual').
  *
- * `R = S − T − X` is plain ledger arithmetic with no special cases: closing a
+ * `R = S − T − X − B` is plain ledger arithmetic with no special cases: closing a
  * day adds an ordinary casino transaction of exactly `R` (see
  * `applyWriteoff`), and any later change to the ledger — a retrospective
  * tournament import, a balance correction on this or another day — re-opens the
  * day with the part nothing explains. A write-off is a judgement about the data
  * of the day, and the ledger keeps it re-examinable instead of pinning it away.
+ * The bonus term is what keeps a rakeback day from looking like a discrepancy:
+ * the credit moved the balance, no tournament explains it, and it is not an
+ * external deposit either — without `− B` the day would offer to "write off"
+ * money the user actually won.
  */
-/** The `R = S − T − X` comparison — shared by the actual day and by previews
+/** The `R = S − T − X − B` comparison — shared by the actual day and by previews
  *  that need a *projected* session (e.g. a balance re-anchored onto the
  *  import's day). The session is injected so a preview can reason about a
  *  state that does not exist in the DB yet. */
@@ -349,7 +360,8 @@ function reconcileFromSession(
   date: string,
   rows: TournamentRow[],
   session: RoomProfit | null,
-  casinoTxUsd: number
+  casinoTxUsd: number,
+  bonusTxUsd: number
 ): DayReconcile {
   const tournamentProfitUsdValue = tournamentProfitUsd(rows)
 
@@ -366,7 +378,7 @@ function reconcileFromSession(
   } else if (session.source === 'auto') {
     blank = 'нет ручного баланса за день — сверить не с чем, запиши его в «Балансах»'
   } else {
-    remainderUsd = session.profitUsd - tournamentProfitUsdValue - casinoTxUsd
+    remainderUsd = session.profitUsd - tournamentProfitUsdValue - casinoTxUsd - bonusTxUsd
     const base = Math.max(Math.abs(session.profitUsd), Math.abs(tournamentProfitUsdValue), 1)
     discrepancyPct = Math.abs(remainderUsd) / base
     flagged = discrepancyPct > DISCREPANCY_THRESHOLD
@@ -388,6 +400,7 @@ function reconcileFromSession(
     sessionProfitUsd: session?.profitUsd ?? null,
     tournamentProfitUsd: tournamentProfitUsdValue,
     casinoUsd: casinoTxUsd,
+    bonusUsd: bonusTxUsd,
     remainderUsd,
     discrepancyPct,
     flagged,
@@ -398,7 +411,14 @@ function reconcileFromSession(
 
 function computeReconcile(roomId: number, date: string, rows: TournamentRow[]): DayReconcile {
   const room = getRoom(roomId)
-  return reconcileFromSession(room, date, rows, sessionRoomProfit(roomId, date), casinoTransactionsUsd(roomId, date))
+  return reconcileFromSession(
+    room,
+    date,
+    rows,
+    sessionRoomProfit(roomId, date),
+    signedTransactionsUsd('casino', roomId, date),
+    signedTransactionsUsd('bonus', roomId, date)
+  )
 }
 
 export function reconcileDay(roomId: number, date: string): DayReconcile {
@@ -473,7 +493,14 @@ export function previewDayReconcile(
     const manual = getBalance(roomId, wouldReanchor.from)
     const session = manual ? computeRoomProfit({ ...manual, date: to }) : null
     const rows = deduped.filter((r) => r.date === to)
-    const reconcile = reconcileFromSession(room, to, rows, session, casinoTransactionsUsd(roomId, to))
+    const reconcile = reconcileFromSession(
+      room,
+      to,
+      rows,
+      session,
+      signedTransactionsUsd('casino', roomId, to),
+      signedTransactionsUsd('bonus', roomId, to)
+    )
     return { reconcile, wouldReanchor }
   }
 
@@ -634,7 +661,8 @@ export function saveDayBatch(
 
 /**
  * Adjust today's balance entry so the session profit matches tournaments
- * (+ casino write-off). delta_target = tournaments + casino + (in − out).
+ * (+ casino write-off + room bonuses).
+ * delta_target = tournaments + casino + bonus + (in − out).
  */
 export function adjustBalanceToTournaments(roomId: number, date: string): DayReconcile {
   getRoom(roomId)
@@ -647,9 +675,9 @@ export function adjustBalanceToTournaments(roomId: number, date: string): DayRec
     throw new HttpError(400, reconcile.blank ?? 'Cannot adjust balance: missing conversion data')
   }
 
-  // sessionProfit = deltaUsd − (in − out)  →  deltaUsd_target = tournaments + casino + (in − out)
+  // sessionProfit = deltaUsd − (in − out)  →  deltaUsd_target = tournaments + casino + bonus + (in − out)
   const session = sessionRoomProfit(roomId, date) as NonNullable<ReturnType<typeof sessionRoomProfit>>
-  const deltaUsdTarget = reconcile.tournamentProfitUsd + reconcile.casinoUsd + (session.flowInUsd - session.flowOutUsd)
+  const deltaUsdTarget = reconcile.tournamentProfitUsd + reconcile.casinoUsd + reconcile.bonusUsd + (session.flowInUsd - session.flowOutUsd)
   // Both operands must live in `current.currency` before they are added: min
   // units of different currencies are not comparable (a RUB kopeck is not a USD
   // cent), so a previous entry in another currency is converted the same way
@@ -677,7 +705,7 @@ function getBalanceRow(roomId: number, date: string): { amount: number; currency
  * and the «Списать» button of the Депозиты и выводы tab. All of them write the
  * very same thing, only the comment and the `reason` differ.
  *
- * The whole leftover (session − tournaments − casino) becomes an ordinary
+ * The whole leftover (session − tournaments − casino − bonuses) becomes an ordinary
  * `casino` transaction of that exact amount in USD — the ledger itself, not a
  * marker next to it. It is written with `recordCasinoPnl`, which deliberately
  * does NOT move the balance: the day is reconciled against a balance the user

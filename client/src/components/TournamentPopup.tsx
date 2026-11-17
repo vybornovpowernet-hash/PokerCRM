@@ -661,6 +661,12 @@ export function TournamentPopup({ open, room, date, onClose, onChanged }: Props)
                 <span className="text-slate-400">Казино</span>
                 <span className="font-medium tabular-nums text-slate-100">{formatAmount(reconcile.casinoUsd, 'USD')}</span>
               </div>
+              {reconcile.bonusUsd !== 0 && (
+                <div className="mt-1 flex items-center justify-between" title="Рейкбек и прочие начисления рума: двигают баланс, но не являются турнирным результатом">
+                  <span className="text-slate-400">Бонусы</span>
+                  <span className="font-medium tabular-nums text-slate-100">{formatAmount(reconcile.bonusUsd, 'USD')}</span>
+                </div>
+              )}
               {reconcile.remainderUsd != null && (
                 <div className="mt-1 flex items-center justify-between">
                   <span className="text-slate-400">Остаток</span>

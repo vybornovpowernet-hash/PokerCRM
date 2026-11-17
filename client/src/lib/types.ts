@@ -65,7 +65,7 @@ export interface SystemUpdateResult {
   message: string
 }
 
-export type TransactionType = 'deposit' | 'withdraw' | 'transfer' | 'casino'
+export type TransactionType = 'deposit' | 'withdraw' | 'transfer' | 'casino' | 'bonus'
 export type Direction = 'in' | 'out'
 
 /**
@@ -199,6 +199,16 @@ export interface OverviewCasino {
   byReason: Record<WriteoffReason, SumCount>
 }
 
+export interface OverviewBonus {
+  totalUsd: number
+  /** Сумма положительных начислений. */
+  creditedUsd: number
+  /** Сумма отрицательных строк (удержаний), знаком. */
+  withheldUsd: number
+  rows: number
+  missingRateRows: number
+}
+
 export interface OverviewFxExcluded {
   noDestAmount: number
   sameCurrency: number
@@ -220,6 +230,8 @@ export interface OverviewRoom {
   withdrawnUsd: number
   feesUsd: number
   casinoUsd: number
+  /** Начисления рума за период (рейкбек/кэшбэк), знаком. Вне `cash`: это прибыль, а не внесённые деньги. */
+  bonusUsd: number
   fxUsd: number
   /** Комиссии рума вместе с курсовой разницей: `feesUsd + fxUsd`. Сумма по румам равна `costs.totalUsd`. */
   costsUsd: number
@@ -259,6 +271,7 @@ export interface MoneyOverview {
   cash: OverviewCash
   fees: OverviewFees
   casino: OverviewCasino
+  bonus: OverviewBonus
   fx: OverviewFx
   costs: OverviewCosts
   rooms: OverviewRoom[]
@@ -276,7 +289,23 @@ export const TRANSACTION_TYPE_LABELS: Record<TransactionType, string> = {
   deposit: 'Депозит',
   withdraw: 'Вывод',
   casino: 'Казино',
+  bonus: 'Бонус',
   transfer: 'Перевод'
+}
+
+/**
+ * Подпись «Направления» для знаковых типов: направление читается из знака суммы,
+ * и депозитные слова («В рум»/«Из рума») соврали бы о происхождении денег.
+ * Казино — игра, бонус — начисление рума (рейкбек, кэшбэк).
+ */
+export const SIGNED_TYPE_LABELS: Record<'casino' | 'bonus', Record<Direction, string>> = {
+  casino: { in: 'Выигрыш', out: 'Проигрыш' },
+  bonus: { in: 'Начисление', out: 'Удержание' }
+}
+
+/** Типы, у которых направление читается из знака суммы, а комиссии не бывает. */
+export function isSignedType(type: TransactionType): boolean {
+  return type === 'casino' || type === 'bonus'
 }
 
 export const DIRECTION_LABELS: Record<Direction, string> = {
@@ -326,6 +355,8 @@ export interface RoomProfit {
   flowOutUsd: number
   profitUsd: number | null
   casinoUsd: number
+  /** Начисления рума за день (рейкбек, кэшбэк), знаком: свои деньги дня, вне турнира и вне казино. */
+  bonusUsd: number
   /** The residual the user accepted and that still matches the day's math (0 when none). */
   acknowledgedUsd: number
   pokerProfitUsd: number | null
@@ -456,6 +487,8 @@ export interface DayReconcile {
   sessionProfitUsd: number | null
   tournamentProfitUsd: number
   casinoUsd: number
+  /** Начисления рума за день (рейкбек, кэшбэк), знаком: отдельный член `R = S − T − X − B`. */
+  bonusUsd: number
   remainderUsd: number | null
   discrepancyPct: number | null
   flagged: boolean

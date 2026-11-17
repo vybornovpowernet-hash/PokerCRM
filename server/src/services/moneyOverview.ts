@@ -73,6 +73,21 @@ export interface OverviewCasino {
   byReason: Record<WriteoffReason, SumCount>
 }
 
+/**
+ * «Бонусы»: начисления рума (рейкбек, кэшбэк, промо). Это не кэш извне и не игра
+ * в казино, поэтому у блока своя строка виджета: в `cash` бонусы не входят, в
+ * `casino` не смешиваются. Знак — как у строки: минус = отмена начисления.
+ */
+export interface OverviewBonus {
+  totalUsd: number
+  /** Сумма положительных начислений. */
+  creditedUsd: number
+  /** Сумма отрицательных строк (удержаний), знаком. */
+  withheldUsd: number
+  rows: number
+  missingRateRows: number
+}
+
 export interface OverviewFxExcluded {
   noDestAmount: number
   sameCurrency: number
@@ -97,6 +112,8 @@ export interface OverviewRoom {
   withdrawnUsd: number
   feesUsd: number
   casinoUsd: number
+  /** Начисления рума за период (рейкбек/кэшбэк), знаком. Вне `cash`: это прибыль, а не внесённые деньги. */
+  bonusUsd: number
   /** Rate difference attributed to the RECEIVING room: the spread is paid where the money landed. */
   fxUsd: number
   /** Combined cost of this room: `feesUsd + fxUsd`. Summed over rooms it equals `costs.totalUsd`. */
@@ -142,6 +159,7 @@ export interface MoneyOverview {
   cash: OverviewCash
   fees: OverviewFees
   casino: OverviewCasino
+  bonus: OverviewBonus
   fx: OverviewFx
   costs: OverviewCosts
   rooms: OverviewRoom[]
@@ -199,6 +217,7 @@ function buildOverview(period: OverviewPeriod): MoneyOverview {
       other: { usd: 0, count: 0 }
     }
   }
+  const bonus: OverviewBonus = { totalUsd: 0, creditedUsd: 0, withheldUsd: 0, rows: 0, missingRateRows: 0 }
   const fx: OverviewFx = {
     lossesUsd: 0,
     gainsUsd: 0,
@@ -218,6 +237,7 @@ function buildOverview(period: OverviewPeriod): MoneyOverview {
       withdrawnUsd: 0,
       feesUsd: 0,
       casinoUsd: 0,
+      bonusUsd: 0,
       fxUsd: 0,
       costsUsd: 0,
       transfersOut: 0,
@@ -280,6 +300,20 @@ function buildOverview(period: OverviewPeriod): MoneyOverview {
         casino.manualUsd += value
       }
       room(t.roomId, t.roomName).casinoUsd += value
+      continue
+    }
+
+    if (t.type === 'bonus') {
+      bonus.rows += 1
+      if (t.amountUsd === null) {
+        bonus.missingRateRows += 1
+        continue
+      }
+      const value = t.amountUsd
+      bonus.totalUsd += value
+      if (value > 0) bonus.creditedUsd += value
+      else bonus.withheldUsd += value
+      room(t.roomId, t.roomName).bonusUsd += value
       continue
     }
 
@@ -356,6 +390,7 @@ function buildOverview(period: OverviewPeriod): MoneyOverview {
     cash,
     fees: { ...fees, byRoom: byRoomOrder(feeRoomById) },
     casino,
+    bonus,
     fx,
     costs,
     rooms,

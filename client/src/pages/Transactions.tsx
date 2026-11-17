@@ -4,10 +4,12 @@ import { SpendingWidget } from '../components/SpendingWidget'
 import { HistoryTotals } from '../components/HistoryTotals'
 import {
   DIRECTION_LABELS,
+  SIGNED_TYPE_LABELS,
   TRANSACTION_TYPE_LABELS,
   WRITEOFF_REASON_LABELS,
   WRITEOFF_REASON_HINTS,
   WRITEOFF_REASONS,
+  isSignedType,
   type Direction,
   type OrphanedDiscrepancy,
   type Room,
@@ -223,7 +225,8 @@ export default function TransactionsPage() {
       ...prev,
       type,
       direction: type === 'deposit' ? 'in' : 'out',
-      fee: type === 'casino' ? '' : prev.fee,
+      // знаковые строки (казино, бонус) не имеют комиссии: сумма и есть результат
+      fee: isSignedType(type) ? '' : prev.fee,
       destAmount: type === 'transfer' ? prev.destAmount : ''
     }))
     if (type !== 'transfer') {
@@ -268,13 +271,17 @@ export default function TransactionsPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
-    const isCasino = form.type === 'casino'
-    const amount = parseUnits(form.amount, { signed: isCasino })
-    if (amount === null || (isCasino ? amount === 0 : amount < 1)) {
+    // Казино и бонус знаковые: сумма может быть с минусом, а направление сервер
+    // выводит из знака, поэтому клиент его не шлёт.
+    const signed = isSignedType(form.type)
+    const amount = parseUnits(form.amount, { signed })
+    if (amount === null || (signed ? amount === 0 : amount < 1)) {
       setError(
-        isCasino
+        form.type === 'casino'
           ? 'Сумма казино должна быть ненулевой (выигрыш со знаком «+», проигрыш со знаком «-»)'
-          : 'Сумма должна быть положительной (до 2 знаков после запятой)'
+          : form.type === 'bonus'
+            ? 'Сумма бонуса должна быть ненулевой (начисление со знаком «+», удержание со знаком «-»)'
+            : 'Сумма должна быть положительной (до 2 знаков после запятой)'
       )
       return
     }
@@ -286,7 +293,7 @@ export default function TransactionsPage() {
       setError('Выбери рум-получатель (Куда)')
       return
     }
-    const fee = isCasino ? 0 : parseUnits(form.fee) ?? 0
+    const fee = signed ? 0 : parseUnits(form.fee) ?? 0
     let destAmount: number | null = null
     if (isCrossCurrency && form.destAmount.trim() !== '') {
       const parsedDest = parseUnits(form.destAmount)
@@ -302,7 +309,7 @@ export default function TransactionsPage() {
       amount,
       fee,
       currency: selectedRoom.cashCurrency,
-      direction: form.type === 'transfer' ? 'out' : form.direction,
+      direction: form.type === 'transfer' ? 'out' : signed ? (amount > 0 ? 'in' : 'out') : form.direction,
       counterpart: form.counterpart || null,
       destinationRoomId: form.type === 'transfer' ? form.destinationRoomId : null,
       destAmount: isCrossCurrency ? destAmount : null,
@@ -379,7 +386,10 @@ export default function TransactionsPage() {
   }
 
   const directionLocked = form.type === 'deposit' || form.type === 'withdraw'
-  const isCasino = form.type === 'casino'
+  // Знаковые типы (казино, бонус): направление диктует знак суммы, селект не нужен.
+  const isSigned = isSignedType(form.type)
+  const signedHint =
+    form.type === 'bonus' ? 'По знаку суммы: «+» начисление, «-» удержание' : 'По знаку суммы: «+» выигрыш, «-» проигрыш'
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
@@ -443,12 +453,10 @@ export default function TransactionsPage() {
               </select>
               {otherRooms.length === 0 && <p className="mt-1 text-xs text-amber-400">Нужен минимум второй рум для перевода</p>}
             </div>
-          ) : isCasino ? (
+          ) : isSigned ? (
             <div>
               <label className={labelCls}>Направление</label>
-              <div className="w-full rounded-lg border border-slate-700 bg-slate-900/30 px-3 py-2 text-sm text-slate-400">
-                По знаку суммы: «+» выигрыш, «-» проигрыш
-              </div>
+              <div className="w-full rounded-lg border border-slate-700 bg-slate-900/30 px-3 py-2 text-sm text-slate-400">{signedHint}</div>
             </div>
           ) : (
             <div>
@@ -473,9 +481,9 @@ export default function TransactionsPage() {
               className={inputCls}
               value={form.amount}
               onChange={(e) => update('amount', e.target.value)}
-              placeholder={isCasino ? '100.00 или -100.00' : '100.00'}
+              placeholder={isSigned ? '100.00 или -100.00' : '100.00'}
               required
-              inputMode={isCasino ? 'text' : 'decimal'}
+              inputMode={isSigned ? 'text' : 'decimal'}
             />
           </div>
           <div>
@@ -486,7 +494,7 @@ export default function TransactionsPage() {
               onChange={(e) => update('fee', e.target.value)}
               placeholder="0.00"
               inputMode="decimal"
-              disabled={isCasino}
+              disabled={isSigned}
             />
           </div>
         </div>
@@ -671,7 +679,9 @@ export default function TransactionsPage() {
                 ))}
             {transactions.map((t) => {
               const out = t.direction === 'out'
-              const isCasinoRow = t.type === 'casino'
+              // Казино и бонус — знаковые строки: направление читается из суммы,
+              // комиссии у них нет, поэтому и рендерят себя одинаково.
+              const signedType: 'casino' | 'bonus' | null = t.type === 'casino' || t.type === 'bonus' ? t.type : null
               return (
                 <tr key={t.id} className="border-b border-slate-800/60 last:border-0">
                   <td className="whitespace-nowrap px-4 py-3 text-slate-400">{t.date}</td>
@@ -679,12 +689,18 @@ export default function TransactionsPage() {
                     <span style={{ color: roomColor(t.roomId) }}>{t.roomName}</span>
                   </td>
                   <td className="px-4 py-3 text-slate-300">
-                    {isCasinoRow ? (
-                      <span className="inline-flex rounded-full border border-violet-800 bg-violet-950/50 px-2 py-0.5 text-xs font-medium text-violet-300">
-                        Казино
-                      </span>
-                    ) : (
+                    {signedType === null ? (
                       TRANSACTION_TYPE_LABELS[t.type]
+                    ) : (
+                      <span
+                        className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${
+                          signedType === 'casino'
+                            ? 'border-violet-800 bg-violet-950/50 text-violet-300'
+                            : 'border-sky-800 bg-sky-950/50 text-sky-300'
+                        }`}
+                      >
+                        {TRANSACTION_TYPE_LABELS[signedType]}
+                      </span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-slate-400">
@@ -692,14 +708,16 @@ export default function TransactionsPage() {
                     <>
                       → <span style={{ color: roomColor(t.destinationRoomId) }}>{t.destinationRoomName ?? '—'}</span>
                     </>
-                  ) : isCasinoRow ? (
-                    t.amount > 0 ? 'Выигрыш' : 'Проигрыш'
+                  ) : signedType !== null ? (
+                    // Направление знаковой строки читается из знака суммы: казино
+                    // выигрывает или проигрывает, рум начисляет или удерживает.
+                    SIGNED_TYPE_LABELS[signedType][t.amount > 0 ? 'in' : 'out']
                   ) : (
                     DIRECTION_LABELS[t.direction]
                   )}
                   </td>
-                  <td className={`whitespace-nowrap px-4 py-3 text-right font-medium ${isCasinoRow ? '' : t.type === 'transfer' ? 'text-amber-400' : out ? 'text-red-400' : 'text-emerald-400'}`}>
-                    {isCasinoRow ? (
+                  <td className={`whitespace-nowrap px-4 py-3 text-right font-medium ${signedType !== null ? '' : t.type === 'transfer' ? 'text-amber-400' : out ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {signedType !== null ? (
                       <span className={t.amount > 0 ? 'text-emerald-400' : 'text-red-400'}>
                         {t.amount > 0 ? '+' : '-'}
                         {formatAmount(Math.abs(t.amount), t.currency)}

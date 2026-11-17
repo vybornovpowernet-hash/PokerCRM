@@ -327,4 +327,109 @@ describe('фильтры истории по-прежнему обновляют
     await waitFor(() => expect(screen.queryByText(/Суммарно по фильтру/)).toBeNull())
     expect(await screen.findByText(/Переводов: 17/)).toBeTruthy()
   })
+
+  it('фильтр умеет выбрать «Бонус»', async () => {
+    await renderPage(emptyTransactionTotals(), [])
+    const historyType = screen.getAllByRole('combobox').find((el) => (el as HTMLSelectElement).options[0]?.text === 'Все типы')
+    if (!historyType) throw new Error('не найден фильтр типа')
+    const user = userEvent.setup()
+    await user.selectOptions(historyType, 'bonus')
+    await waitFor(() => expect(mocks.transactionsList).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'bonus' })))
+  })
+})
+
+describe('строка «Бонус» в истории', () => {
+  function cells(row: HTMLElement): HTMLElement[] {
+    return Array.from(row.querySelectorAll('td')) as HTMLElement[]
+  }
+
+  /** «Бонус» живёт и в option'ах селектов, и в бейдже строки: нужен именно бейдж. */
+  async function bonusRow(): Promise<HTMLElement> {
+    const badge = (await screen.findAllByText('Бонус')).find((el) => el.tagName === 'SPAN')
+    const row = badge?.closest('tr')
+    if (!row) throw new Error('строка бонуса не найдена')
+    return row as HTMLElement
+  }
+
+  it('риcует бейдж типа, направление по знаку и зелёный плюс', async () => {
+    await renderPage(emptyTransactionTotals(), [tx({ id: 30, type: 'bonus', amount: 5_000, amountUsd: 5_000 })])
+    const row = await bonusRow()
+    const [date, room, type, direction, amount, fee] = cells(row)
+    expect(date?.textContent).toBe('2026-11-05')
+    expect(room?.textContent).toBe('Bybit')
+    // Тип — бейджем, как «Казино»: рейкбек не должен теряться в списке.
+    expect(type?.textContent).toBe('Бонус')
+    expect(type?.querySelector('span')?.className).toContain('rounded-full')
+    // Направление — «Начисление», а не «В рум»: это не депозит.
+    expect(direction?.textContent).toBe('Начисление')
+    expect(amount?.textContent).toContain('+$50.00')
+    expect(amount?.querySelector('span')?.className).toContain('text-emerald-400')
+    // комиссии у бонуса нет
+    expect(fee?.textContent).toContain('—')
+  })
+
+  it('отрицательный бонус — «Удержание» красным минусом', async () => {
+    await renderPage(emptyTransactionTotals(), [tx({ id: 31, type: 'bonus', amount: -1_000, amountUsd: -1_000, direction: 'out' })])
+    const row = await bonusRow()
+    const [, , , direction, amount] = cells(row)
+    expect(direction?.textContent).toBe('Удержание')
+    expect(amount?.textContent).toContain('-$10.00')
+    expect(amount?.querySelector('span')?.className).toContain('text-red-400')
+  })
+
+  it('казино остаётся «Выигрыш»/«Проигрыш»: общий рендер не съел его подписи', async () => {
+    await renderPage(emptyTransactionTotals(), [
+      tx({ id: 32, type: 'casino', amount: 2_000, amountUsd: 2_000 }),
+      tx({ id: 33, type: 'casino', amount: -3_000, amountUsd: -3_000, direction: 'out' })
+    ])
+    const win = (await screen.findByText('Выигрыш')).closest('tr') as HTMLElement
+    const loss = screen.getByText('Проигрыш').closest('tr') as HTMLElement
+    expect(cells(win)[2]?.textContent).toBe('Казино')
+    expect(cells(loss)[2]?.textContent).toBe('Казино')
+  })
+})
+
+describe('форма операции: тип «Бонус»', () => {
+  const amountInput = () => screen.getByPlaceholderText('100.00 или -100.00') as HTMLInputElement
+  const feeInput = () => screen.getByPlaceholderText('0.00') as HTMLInputElement
+
+  async function openFormWithBonus() {
+    await renderPage(emptyTransactionTotals(), [])
+    const user = userEvent.setup()
+    const typeSelect = screen
+      .getAllByRole('combobox')
+      .find((el) => Array.from((el as HTMLSelectElement).options).some((o) => o.value === 'bonus'))
+    if (!typeSelect) throw new Error('в форме нет типа «Бонус»')
+    await user.selectOptions(typeSelect, 'bonus')
+    // рум по умолчанию уже выбран (первый из списка); подсказка знака — признак режима
+    expect(await screen.findByText(/По знаку суммы/)).toBeTruthy()
+    return user
+  }
+
+  it('комиссия заблокирована, направление читается по знаку суммы', async () => {
+    const user = await openFormWithBonus()
+    expect(feeInput().disabled).toBe(true)
+    // поле суммы принимает минус: это знаковый тип
+    await user.type(amountInput(), '-12.50')
+    expect(amountInput().value).toBe('-12.50')
+    expect(amountInput()).toHaveProperty('inputMode', 'text')
+  })
+
+  it('шлёт знак суммы и направление из знака, комиссия — нулевая', async () => {
+    const user = await openFormWithBonus()
+    await user.type(amountInput(), '-12.50')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+    await waitFor(() => expect(mocks.create).toHaveBeenCalled())
+    const payload = mocks.create.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(payload).toMatchObject({ type: 'bonus', amount: -1250, fee: 0, direction: 'out' })
+  })
+
+  it('нулевую сумму бонуса не отправляет', async () => {
+    const user = await openFormWithBonus()
+    await user.clear(amountInput())
+    await user.type(amountInput(), '0')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+    expect(await screen.findByText(/Сумма бонуса должна быть ненулевой/)).toBeTruthy()
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
 })

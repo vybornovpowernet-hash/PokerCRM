@@ -577,6 +577,40 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE transactions ADD COLUMN dest_amount INTEGER;
   `,
+  // v34: `bonus` — рейкбек, кэшбэк и прочие начисления рума. Это прибыль, а не
+  // внешний приход: строка двигает баланс рума, но намеренно исключена из учётных
+  // потоков (`flowTotals`/`flowsUsdRange`), иначе `profit = delta − (in − out)`
+  // занижал бы её как депозит. По форме это «знаковое начисление, не игра» —
+  // сосед `casino`: сумма знаковая (минус = отмена начисления), комиссия всегда 0.
+  // SQLite не ослабляет CHECK через ALTER, поэтому таблица пересобирается по
+  // образцу v15/v29: все колонки (включая writeoff/writeoff_reason/dest_amount)
+  // перечисляются явно и оба индекса пересоздаются.
+  `
+  CREATE TABLE transactions_v34 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('deposit', 'withdraw', 'transfer', 'casino', 'bonus')),
+    amount INTEGER NOT NULL CHECK ((type IN ('casino', 'bonus') AND amount <> 0) OR (type NOT IN ('casino', 'bonus') AND amount > 0)),
+    fee INTEGER NOT NULL DEFAULT 0 CHECK (fee >= 0),
+    currency TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+    counterpart TEXT,
+    destination_room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
+    date TEXT NOT NULL,
+    comment TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    writeoff INTEGER NOT NULL DEFAULT 0,
+    writeoff_reason TEXT,
+    dest_amount INTEGER,
+    CHECK (type NOT IN ('casino', 'bonus') OR fee = 0)
+  );
+  INSERT INTO transactions_v34 (id, room_id, type, amount, fee, currency, direction, counterpart, destination_room_id, date, comment, created_at, writeoff, writeoff_reason, dest_amount)
+    SELECT id, room_id, type, amount, fee, currency, direction, counterpart, destination_room_id, date, comment, created_at, writeoff, writeoff_reason, dest_amount FROM transactions;
+  DROP TABLE transactions;
+  ALTER TABLE transactions_v34 RENAME TO transactions;
+  CREATE INDEX idx_transactions_room_date ON transactions(room_id, date);
+  CREATE INDEX idx_transactions_destination ON transactions(destination_room_id);
+  `,
 ]
 
 let dbInstance: DatabaseSync | undefined

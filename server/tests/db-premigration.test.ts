@@ -43,15 +43,49 @@ function latestVersion(): number {
 }
 
 /**
+ * Откат на одну миграцию назад = схема v33. С v34 «последняя миграция» больше не
+ * добавляет столбец (она пересобирает таблицу ради CHECK типа), поэтому
+ * DROP COLUMN больше не подходит: восстанавливаем `transactions` определением v33
+ * и понижает user_version. Без отката схемы понижение версии упало бы
+ * duplicate column name при повторном прогоне миграций.
+ */
+function downgradeToPreviousVersion(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE transactions_v33 (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      type TEXT NOT NULL CHECK (type IN ('deposit', 'withdraw', 'transfer', 'casino')),
+      amount INTEGER NOT NULL CHECK ((type = 'casino' AND amount <> 0) OR (type <> 'casino' AND amount > 0)),
+      fee INTEGER NOT NULL DEFAULT 0 CHECK (fee >= 0),
+      currency TEXT NOT NULL,
+      direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+      counterpart TEXT,
+      destination_room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
+      date TEXT NOT NULL,
+      comment TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      writeoff INTEGER NOT NULL DEFAULT 0,
+      writeoff_reason TEXT,
+      dest_amount INTEGER,
+      CHECK (type <> 'casino' OR fee = 0)
+    );
+    INSERT INTO transactions_v33 (id, room_id, type, amount, fee, currency, direction, counterpart, destination_room_id, date, comment, created_at, writeoff, writeoff_reason, dest_amount)
+      SELECT id, room_id, type, amount, fee, currency, direction, counterpart, destination_room_id, date, comment, created_at, writeoff, writeoff_reason, dest_amount FROM transactions;
+    DROP TABLE transactions;
+    ALTER TABLE transactions_v33 RENAME TO transactions;
+    CREATE INDEX idx_transactions_room_date ON transactions(room_id, date);
+    CREATE INDEX idx_transactions_destination ON transactions(destination_room_id);
+  `)
+}
+
+/**
  * База «как у друга до обновления»: полностью мигрирована, затем откатана на одну
- * миграцию назад тем же способом, что и тест v33, — удалён столбец, понижен
- * user_version. Понижать версию без отката схемы нельзя: миграции упадут на
- * duplicate column name.
+ * миграцию назад (`downgradeToPreviousVersion`) и понижена на версию.
  */
 function oldDbWithMarker(path: string, version: number): void {
   const db = initDb(path)
   try {
-    db.exec('ALTER TABLE transactions DROP COLUMN dest_amount')
+    downgradeToPreviousVersion(db)
     db.exec(`PRAGMA user_version = ${version - 1}`)
     // цикл «старая база → снимок → миграция» повторяется несколько раз над одним
     // файлом, поэтому маркер сначала убирается: имя в rooms уникальное
@@ -85,6 +119,21 @@ function columnsOf(path: string, table: string): string[] {
   const db = new DatabaseSync(path, { readOnly: true })
   try {
     return db.prepare(`PRAGMA table_info(${table})`).all().map((r) => (r as { name: string }).name)
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * Отличает схему v34 от v33: CHECK типа разрешает строку 'bonus' или нет. v34
+ * не добавляет колонок, поэтому список столбцов о ней не скажет ничего —
+ * смотреть надо текст ограничения.
+ */
+function typeCheckAllowsBonus(path: string): boolean {
+  const db = new DatabaseSync(path, { readOnly: true })
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transactions'").get() as { sql: string }
+    return row.sql.includes("'bonus'")
   } finally {
     db.close()
   }
@@ -128,7 +177,9 @@ describe('premigration snapshot', () => {
     const snapshot = join(snapshotDir(dbPath), files[0])
     expect(markerRows(snapshot)).toBe(1)
     expect(readVersion(snapshot)).toBe(LATEST - 1)
-    expect(columnsOf(snapshot, 'transactions')).not.toContain('dest_amount')
+    // снимок снят ДО v34: его CHECK типа про бонус ничего не знает
+    expect(typeCheckAllowsBonus(snapshot)).toBe(false)
+    expect(typeCheckAllowsBonus(dbPath)).toBe(true)
     expect(statSync(snapshot).size).toBeGreaterThan(0)
     expect(readVersion(dbPath)).toBe(LATEST)
   })
@@ -143,7 +194,7 @@ describe('premigration snapshot', () => {
   it('creates no snapshot and no directory for an in-memory database', () => {
     const before = readdirSync(process.cwd()).filter((n) => n === 'premigration')
     const db = initDb(':memory:')
-    db.exec('ALTER TABLE transactions DROP COLUMN dest_amount')
+    downgradeToPreviousVersion(db)
     db.exec(`PRAGMA user_version = ${LATEST - 1}`)
     runMigrations(db)
     db.close()
@@ -228,9 +279,11 @@ describe('premigration snapshot', () => {
     expect(message).toMatch(/npm run backup/)
     expect(message).toContain(dbPath)
 
-    // база не тронута: версия, столбца нет, маркер на месте
+    // база не тронута: версия та же, CHECK типа ещё про бонус ничего не знает,
+    // маркер на месте
     expect(readVersion(dbPath)).toBe(LATEST - 1)
-    expect(columnsOf(dbPath, 'transactions')).not.toContain('dest_amount')
+    expect(typeCheckAllowsBonus(dbPath)).toBe(false)
+    expect(columnsOf(dbPath, 'transactions')).toContain('dest_amount')
     expect(markerRows(dbPath)).toBe(1)
     // соединение закрыто: временную папку можно удалить без ошибки
     expect(() => removeDir(dir)).not.toThrow()

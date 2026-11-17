@@ -67,6 +67,7 @@ const OPERATIONS: Forms = ['операция', 'операции', 'операц
 // Дательный падеж: «нет курса по …».
 const OPERATIONS_TO: Forms = ['операции', 'операциям', 'операциям']
 const CASINO_ROWS_TO: Forms = ['строке казино', 'строкам казино', 'строкам казино']
+const BONUS_ROWS_TO: Forms = ['строке бонуса', 'строкам бонуса', 'строкам бонуса']
 const TRANSFERS_GENITIVE: Forms = ['перевода', 'переводов', 'переводов']
 
 function Metric({ label, value, tone, hint }: { label: string; value: number | null; tone: Tone; hint?: string }) {
@@ -174,18 +175,19 @@ function reasonLabel(reason: WriteoffReason): string {
 }
 
 function Overview({ data, colorOf }: { data: MoneyOverview; colorOf: (roomId: number) => string }) {
-  const { cash, fees, casino, costs } = data
+  const { cash, fees, casino, bonus, costs } = data
   const [open, setOpen] = useState(false)
 
   return (
     <div className="space-y-4">
       <section aria-label="Сводка за период" className="space-y-2">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <Metric label="Внесено" value={cash.depositedUsd} tone="neutral" />
           <Metric label="Выведено" value={cash.withdrawnUsd} tone="gain" />
           <NetMetric net={cash.netInUsd} />
           <CostsMetric costs={costs} />
           <Metric label="Казино" value={casino.totalUsd} tone="profit" hint={`${casino.rows} ${pluralRu(casino.rows, OPERATIONS)}`} />
+          <Metric label="Бонусы" value={bonus.totalUsd} tone="profit" hint={`${bonus.rows} ${pluralRu(bonus.rows, OPERATIONS)}`} />
         </div>
         <RateGap count={cash.missingRateRows} forms={OPERATIONS_TO} tail=" — суммы неполные" />
       </section>
@@ -246,6 +248,12 @@ function Overview({ data, colorOf }: { data: MoneyOverview; colorOf: (roomId: nu
                 )}
               </div>
             </Block>
+            <Block title="Бонусы" note="Рейкбек, кэшбэк и промо от румов. Это заработок, а не внесённые деньги: в «Внесено» бонусов нет, и в «Казино» они не смешиваются.">
+              <Line label="Начисления" value={bonus.creditedUsd} tone="profit" />
+              <Line label="Удержания" value={bonus.withheldUsd} tone="profit" />
+              <Line label="Итого" value={bonus.totalUsd} tone="profit" />
+              <RateGap count={bonus.missingRateRows} forms={BONUS_ROWS_TO} tail=" — суммы неполные" />
+            </Block>
           </div>
 
           <div className="overflow-x-auto rounded-lg border border-slate-700/70">
@@ -257,6 +265,7 @@ function Overview({ data, colorOf }: { data: MoneyOverview; colorOf: (roomId: nu
                   <th className="px-3 py-2 text-right">Выведено</th>
                   <th className="px-3 py-2 text-right">Комиссии</th>
                   <th className="px-3 py-2 text-right">Казино</th>
+                  <th className="px-3 py-2 text-right">Бонусы</th>
                 </tr>
               </thead>
               <tbody>
@@ -269,6 +278,7 @@ function Overview({ data, colorOf }: { data: MoneyOverview; colorOf: (roomId: nu
                     <td className="px-3 py-2 text-right tabular-nums text-emerald-400">{usd(row.withdrawnUsd)}</td>
                     <td className={`px-3 py-2 text-right tabular-nums ${toneClass('expense', row.costsUsd)}`}>{usd(row.costsUsd)}</td>
                     <td className={`px-3 py-2 text-right tabular-nums ${toneClass('profit', row.casinoUsd)}`}>{usd(row.casinoUsd)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${toneClass('profit', row.bonusUsd)}`}>{usd(row.bonusUsd)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -355,6 +365,7 @@ export function SpendingWidget({ rooms, reloadToken = 0 }: SpendingWidgetProps) 
     data.cash.withdrawnUsd === 0 &&
     data.fees.rows === 0 &&
     data.casino.rows === 0 &&
+    data.bonus.rows === 0 &&
     data.fx.rows === 0
 
   return (

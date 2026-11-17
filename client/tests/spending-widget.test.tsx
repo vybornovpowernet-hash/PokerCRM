@@ -78,6 +78,7 @@ function overviewFixture(overrides: Partial<MoneyOverview> = {}): MoneyOverview 
       missingRateRows: 0,
       byReason: { casino: { usd: 0, count: 0 }, fx: { usd: -984, count: 2 }, other: { usd: 0, count: 0 } }
     },
+    bonus: { totalUsd: 4_000, creditedUsd: 5_000, withheldUsd: -1_000, rows: 2, missingRateRows: 0 },
     fx: { lossesUsd: 265, gainsUsd: 2, netLossUsd: 263, rows: 2, excluded: { noDestAmount: 1, sameCurrency: 12, noRate: 1 } },
     costs: {
       totalUsd: 674,
@@ -89,8 +90,8 @@ function overviewFixture(overrides: Partial<MoneyOverview> = {}): MoneyOverview 
       fxNotCountedTransfers: 2
     },
     rooms: [
-      { roomId: 9, name: 'Bybit', depositedUsd: 10_000, withdrawnUsd: 2_000, feesUsd: 410, casinoUsd: 0, fxUsd: 265, costsUsd: 675, transfersOut: 3, transfersIn: 6 },
-      { roomId: 2, name: 'PokerDom', depositedUsd: 115, withdrawnUsd: 0, feesUsd: 1, casinoUsd: -15_468, fxUsd: -2, costsUsd: -1, transfersOut: 1, transfersIn: 1 }
+      { roomId: 9, name: 'Bybit', depositedUsd: 10_000, withdrawnUsd: 2_000, feesUsd: 410, casinoUsd: 0, bonusUsd: 3_000, fxUsd: 265, costsUsd: 675, transfersOut: 3, transfersIn: 6 },
+      { roomId: 2, name: 'PokerDom', depositedUsd: 115, withdrawnUsd: 0, feesUsd: 1, casinoUsd: -15_468, bonusUsd: 1_000, fxUsd: -2, costsUsd: -1, transfersOut: 1, transfersIn: 1 }
     ],
     routes: [
       { fromRoomId: 9, fromRoomName: 'Bybit', toRoomId: 2, toRoomName: 'PokerDom', count: 5, feeUsd: 650, fxUsd: -2, costsUsd: 648, feeByCurrency: { USD: 650 } },
@@ -183,14 +184,18 @@ describe('период виджета', () => {
   })
 })
 
-describe('верхний ряд: ровно пять карточек', () => {
-  it('карточки: Внесено, Выведено, третья, Комиссии, Казино — и ничего сверху больше', async () => {
+describe('верхний ряд: ровно шесть карточек', () => {
+  it('карточки: Внесено, Выведено, третья, Комиссии, Казино, Бонусы — и ничего сверху больше', async () => {
     await renderWidget()
     const summary = region('Сводка за период')
-    for (const label of ['Внесено', 'Выведено', 'Осталось отбить', 'Комиссии', 'Казино']) {
+    for (const label of ['Внесено', 'Выведено', 'Осталось отбить', 'Комиссии', 'Казино', 'Бонусы']) {
       expect(within(summary).getByText(label)).toBeTruthy()
     }
-    expect(summary.querySelectorAll('[data-value]')).toHaveLength(5)
+    expect(summary.querySelectorAll('[data-value]')).toHaveLength(6)
+    // карточка бонусов — про заработок рума, а не про внесённое: в «Внесено» этих денег нет
+    expect(valueNear(summary, 'Бонусы').textContent).toBe('$40.00')
+    expect(valueNear(summary, 'Бонусы').className).toContain('text-emerald-400')
+    expect(within(summary).getByText('2 операции')).toBeTruthy()
     // карточки «Курсовая разница» и целого блока курсовой разницы больше нет
     expect(screen.queryByText('Курсовая разница')).toBeNull()
     expect(screen.queryByRole('region', { name: 'Курсовая разница по переводам' })).toBeNull()
@@ -390,6 +395,29 @@ describe('подробности под кнопкой «Подробнее»', 
     expect(within(casino).queryByText('Разница курсов')).toBeNull()
   })
 
+  it('бонусы: начисления, удержания и итог — отдельный блок, не «Казино»', async () => {
+    await renderWidget()
+    await openDetails(userEvent.setup())
+    const bonus = region('Бонусы')
+    expect(valueNear(bonus, 'Начисления').textContent).toBe('$50.00')
+    expect(valueNear(bonus, 'Начисления').className).toContain('text-emerald-400')
+    expect(valueNear(bonus, 'Удержания').textContent).toBe('-$10.00')
+    expect(valueNear(bonus, 'Удержания').className).toContain('text-red-400')
+    expect(valueNear(bonus, 'Итого').textContent).toBe('$40.00')
+    // бонусы не смешиваются с казино: в блоке казино их строк нет
+    expect(within(region('Казино')).queryByText('Начисления')).toBeNull()
+    expect(within(region('Казино')).queryByText('Удержания')).toBeNull()
+  })
+
+  it('бонусы: янтарная строка про отсутствие курса говорит, что итог неполный', async () => {
+    const withoutRate = overviewFixture()
+    withoutRate.bonus = { totalUsd: 5_000, creditedUsd: 5_000, withheldUsd: 0, rows: 2, missingRateRows: 1 }
+    mocks.overview.mockResolvedValue(withoutRate)
+    await renderWidget()
+    await openDetails(userEvent.setup())
+    expect(within(region('Бонусы')).getByText('нет курса по 1 строке бонуса — суммы неполные')).toBeTruthy()
+  })
+
   it('не показывает причину и типы без строк', async () => {
     const without = overviewFixture()
     without.fees.byType = { deposit: { usd: 151, count: 2 }, withdraw: { usd: 0, count: 0 }, transfer: { usd: 0, count: 0 } }
@@ -415,7 +443,7 @@ describe('таблицы в подробностях', () => {
     await renderWidget()
     await openDetails(userEvent.setup())
     const table = screen.getByRole('table', { name: 'Куда уходят деньги по румам' })
-    for (const column of ['Рум', 'Внесено', 'Выведено', 'Комиссии', 'Казино']) {
+    for (const column of ['Рум', 'Внесено', 'Выведено', 'Комиссии', 'Казино', 'Бонусы']) {
       expect(within(table).getByText(column)).toBeTruthy()
     }
     expect(within(table).queryByText(/Курс/)).toBeNull()

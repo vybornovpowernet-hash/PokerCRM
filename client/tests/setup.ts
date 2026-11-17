@@ -34,6 +34,7 @@ export function emptyMoneyOverview(): MoneyOverview {
       missingRateRows: 0,
       byReason: { casino: { ...zero }, fx: { ...zero }, other: { ...zero } }
     },
+    bonus: { totalUsd: 0, creditedUsd: 0, withheldUsd: 0, rows: 0, missingRateRows: 0 },
     fx: { lossesUsd: 0, gainsUsd: 0, netLossUsd: 0, rows: 0, excluded: { noDestAmount: 0, sameCurrency: 0, noRate: 0 } },
     costs: {
       totalUsd: 0,

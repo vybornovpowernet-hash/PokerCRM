@@ -180,6 +180,15 @@ export default function SessionsPage() {
                     {r.casinoUsd < 0 && (
                       <div className="mt-0.5 text-xs tabular-nums text-rose-400/80">↳ Казино: −{formatAmount(Math.abs(r.casinoUsd), 'USD')}</div>
                     )}
+                    {r.bonusUsd !== 0 && (
+                      <div
+                        className="mt-0.5 text-xs tabular-nums text-sky-300/80"
+                        title="Начисление рума (рейкбек, кэшбэк): деньги дня, но не результат турниров"
+                      >
+                        ↳ Бонусы: {r.bonusUsd < 0 ? '−' : '+'}
+                        {formatAmount(Math.abs(r.bonusUsd), 'USD')}
+                      </div>
+                    )}
                     {r.acknowledgedUsd !== 0 && (
                       <div className="mt-0.5 text-xs tabular-nums text-slate-500" title="Расхождение принято пользователем: деньги не списаны и в профит не входят">
                         ↳ принято расхождение: {r.acknowledgedUsd < 0 ? '−' : '+'}

@@ -46,6 +46,7 @@ function day(date: string, totalUsd: number): SessionDay {
         flowOutUsd: 0,
         profitUsd: totalUsd,
         casinoUsd: 0,
+        bonusUsd: 0,
         acknowledgedUsd: 0,
         pokerProfitUsd: totalUsd,
         convertible: true
