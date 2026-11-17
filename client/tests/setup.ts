@@ -61,6 +61,12 @@ if (typeof window !== 'undefined' && !window.ResizeObserver) {
 
 window.scrollTo = () => undefined
 
+// jsdom не реализует Element.prototype.scrollIntoView, а кастомный Select прокручивает
+// меню к активной опции. В тесте прокручивать нечего, поэтому достаточна no-op заглушки.
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => undefined
+}
+
 // Композер дневника строит превью локальных файлов через blob-URL, а реализация vitest
 // умеет работать только с внутренними blob-объектами jsdom и падает на обычном File.
 // Поэтому заглушка всегда своя: уникальные адреса + журнал освобождений, чтобы тест

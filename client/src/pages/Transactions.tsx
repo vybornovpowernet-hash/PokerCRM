@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, type TransactionPayload } from '../lib/api'
 import { SpendingWidget } from '../components/SpendingWidget'
 import { HistoryTotals } from '../components/HistoryTotals'
+import { Select } from '../components/Select'
 import {
   DIRECTION_LABELS,
   SIGNED_TYPE_LABELS,
@@ -407,50 +408,39 @@ export default function TransactionsPage() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
             <label className={labelCls}>Тип</label>
-            <select className={inputCls} value={form.type} onChange={(e) => pickType(e.target.value as TransactionType)}>
-              {Object.entries(TRANSACTION_TYPE_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
+            <Select
+              ariaLabel="Тип"
+              value={form.type}
+              onValueChange={(v) => pickType(v as TransactionType)}
+              options={Object.entries(TRANSACTION_TYPE_LABELS).map(([value, label]) => ({ value, label }))}
+            />
           </div>
           <div>
             <label className={labelCls}>{form.type === 'transfer' ? 'Откуда' : 'Рум'}</label>
-            <select
-              className={inputCls}
-              value={form.roomId}
-              onChange={(e) => pickRoom(Number(e.target.value))}
-              style={selectedRoom ? { color: selectedRoom.color } : undefined}
-            >
-              <option value={0} disabled>
-                — выбери рум —
-              </option>
-              {rooms.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name} · {r.cashCurrency}
-                </option>
-              ))}
-            </select>
+            <Select
+              ariaLabel={form.type === 'transfer' ? 'Откуда' : 'Рум'}
+              placeholder="— выбери рум —"
+              value={String(form.roomId)}
+              onValueChange={(v) => pickRoom(Number(v))}
+              options={[
+                { value: '0', label: '— выбери рум —', disabled: true },
+                ...rooms.map((r) => ({ value: String(r.id), label: `${r.name} · ${r.cashCurrency}`, color: r.color }))
+              ]}
+            />
           </div>
           {form.type === 'transfer' ? (
             <div>
               <label className={labelCls}>Куда</label>
-              <select
-                className={inputCls}
-                value={form.destinationRoomId}
-                onChange={(e) => update('destinationRoomId', Number(e.target.value))}
-                style={rooms.find((r) => r.id === form.destinationRoomId) ? { color: roomColor(form.destinationRoomId) } : undefined}
-              >
-                <option value={0} disabled>
-                  — выбери рум-получатель —
-                </option>
-                {otherRooms.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} · {r.cashCurrency}
-                  </option>
-                ))}
-              </select>
+              <Select
+                ariaLabel="Куда"
+                placeholder="— выбери рум-получатель —"
+                value={String(form.destinationRoomId)}
+                onValueChange={(v) => update('destinationRoomId', Number(v))}
+                options={[
+                  { value: '0', label: '— выбери рум-получатель —', disabled: true },
+                  ...otherRooms.map((r) => ({ value: String(r.id), label: `${r.name} · ${r.cashCurrency}`, color: r.color }))
+                ]}
+              />
               {otherRooms.length === 0 && <p className="mt-1 text-xs text-amber-400">Нужен минимум второй рум для перевода</p>}
             </div>
           ) : isSigned ? (
@@ -461,15 +451,16 @@ export default function TransactionsPage() {
           ) : (
             <div>
               <label className={labelCls}>Направление</label>
-              <select
-                className={inputCls}
+              <Select
+                ariaLabel="Направление"
                 value={form.direction}
-                onChange={(e) => update('direction', e.target.value as Direction)}
+                onValueChange={(v) => update('direction', v as Direction)}
                 disabled={directionLocked}
-              >
-                <option value="in">{DIRECTION_LABELS.in}</option>
-                <option value="out">{DIRECTION_LABELS.out}</option>
-              </select>
+                options={[
+                  { value: 'in', label: DIRECTION_LABELS.in },
+                  { value: 'out', label: DIRECTION_LABELS.out }
+                ]}
+              />
             </div>
           )}
         </div>
@@ -561,31 +552,26 @@ export default function TransactionsPage() {
       <div className="rounded-xl border border-slate-700 bg-slate-800/80 p-5 shadow-lg shadow-black/40">
         <h2 className="mb-4 text-lg font-semibold text-slate-200">История операций</h2>
         <div className="flex flex-wrap items-center gap-3">
-        <select
-          className={`${inputCls} w-auto`}
+        <Select
+          className="w-auto"
+          ariaLabel="Фильтр по типу"
           value={filter.type}
-          onChange={(e) => setFilter({ ...filter, type: e.target.value as TransactionType | '' })}
-        >
-          <option value="">Все типы</option>
-          {Object.entries(TRANSACTION_TYPE_LABELS).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <select
-          className={`${inputCls} w-auto`}
-          value={filter.roomId}
-          onChange={(e) => setFilter({ ...filter, roomId: e.target.value ? Number(e.target.value) : '' })}
-          style={filter.roomId ? { color: roomColor(filter.roomId) } : undefined}
-        >
-          <option value="">Все румы</option>
-          {rooms.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.name}
-            </option>
-          ))}
-        </select>
+          onValueChange={(v) => setFilter({ ...filter, type: v as TransactionType | '' })}
+          options={[
+            { value: '', label: 'Все типы' },
+            ...Object.entries(TRANSACTION_TYPE_LABELS).map(([value, label]) => ({ value, label }))
+          ]}
+        />
+        <Select
+          className="w-auto"
+          ariaLabel="Фильтр по руму"
+          value={filter.roomId === '' ? '' : String(filter.roomId)}
+          onValueChange={(v) => setFilter({ ...filter, roomId: v ? Number(v) : '' })}
+          options={[
+            { value: '', label: 'Все румы' },
+            ...rooms.map((r) => ({ value: String(r.id), label: r.name, color: r.color }))
+          ]}
+        />
         <div className="flex flex-wrap items-center gap-4">
           <label className="flex items-center gap-2">
             <span className="text-sm text-slate-400">С:</span>

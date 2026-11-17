@@ -1,9 +1,10 @@
 import { render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import userEvent, { type UserEvent } from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TransactionsPage from '../src/pages/Transactions'
 import { emptyMoneyOverview } from './setup'
 import { formatUnits } from '../src/lib/money'
+import { pickOption, selectValue } from './select-helper'
 
 const mocks = vi.hoisted(() => ({
   roomsList: vi.fn(),
@@ -54,30 +55,25 @@ const rubRoom = {
   createdAt: '2026-11-01 00:00:00'
 }
 
-function selects() {
-  return screen.getAllByRole('combobox')
-}
-
-function selectAt(index: number): HTMLElement {
-  const el = selects()[index]
-  if (!el) throw new Error(`combobox #${index} not found`)
-  return el
-}
-
+/**
+ * Раньше это были нативные `<select>`, и тест выбирал опцию по id одной командой
+ * (`user.selectOptions`). Кастомный список открывается кликом, поэтому выбор —
+ * «открыть контрол с таким-то доступным именем, кликнуть подпись опции».
+ */
 async function renderLoaded() {
   mocks.transactionsList.mockResolvedValue({ transactions: [], discrepancies: [] })
   render(<TransactionsPage />)
   await screen.findByRole('heading', { name: 'Новая операция' })
-  // the room selects only fill in after api.rooms.list resolves
-  await waitFor(() => expect((selectAt(1) as HTMLSelectElement).value).toBe('1'))
+  // рум подставляется из api.rooms.list, а не из EMPTY_FORM: ждём именно подпись в триггере
+  await waitFor(() => expect(selectValue('Рум')).toBe('Bybit · USD'))
 }
 
-async function chooseTransfer(fromId: string, toId: string) {
+async function chooseTransfer(from: string, to: string) {
   const user = userEvent.setup()
-  await user.selectOptions(selectAt(0), 'transfer')
-  // the third select only becomes "Куда" after the type switch — re-read the list
-  await user.selectOptions(selectAt(1), fromId)
-  await user.selectOptions(selectAt(2), toId)
+  await pickOption(user, 'Тип', 'Перевод')
+  // третий контрол становится «Куда» только после переключения типа
+  await pickOption(user, 'Откуда', from)
+  await pickOption(user, 'Куда', to)
   return user
 }
 
@@ -93,7 +89,7 @@ beforeEach(() => {
 describe('cross-currency transfer form', () => {
   it('shows the credited-amount field and prefills it from the rate suggestion', async () => {
     await renderLoaded()
-    const user = await chooseTransfer('1', '2')
+    const user = await chooseTransfer('Bybit · USD', 'PokerDom · RUB')
     await user.type(screen.getByPlaceholderText('100.00'), '50')
 
     const credited = (await screen.findByPlaceholderText('₽0.00')) as HTMLInputElement
@@ -106,7 +102,7 @@ describe('cross-currency transfer form', () => {
 
   it('keeps the user-typed exact figure over a newer suggestion and sends it in the payload', async () => {
     await renderLoaded()
-    const user = await chooseTransfer('1', '2')
+    const user = await chooseTransfer('Bybit · USD', 'PokerDom · RUB')
     await user.type(screen.getByPlaceholderText('100.00'), '50')
 
     const credited = (await screen.findByPlaceholderText('₽0.00')) as HTMLInputElement
@@ -142,7 +138,7 @@ describe('cross-currency transfer form', () => {
     const usdRoom2 = { ...rubRoom, id: 3, name: 'GG', cashCurrency: 'USD', rateSource: null }
     mocks.roomsList.mockResolvedValue([usdRoom, usdRoom2])
     await renderLoaded()
-    const user = await chooseTransfer('1', '3')
+    const user = await chooseTransfer('Bybit · USD', 'GG · USD')
     await user.type(screen.getByPlaceholderText('100.00'), '50')
 
     expect(screen.queryByPlaceholderText('₽0.00')).toBeNull()
@@ -156,7 +152,7 @@ describe('cross-currency transfer form', () => {
 
   it('rejects an invalid credited amount with a Russian error', async () => {
     await renderLoaded()
-    const user = await chooseTransfer('1', '2')
+    const user = await chooseTransfer('Bybit · USD', 'PokerDom · RUB')
     await user.type(screen.getByPlaceholderText('100.00'), '50')
     const credited = (await screen.findByPlaceholderText('₽0.00')) as HTMLInputElement
     await user.clear(credited)
@@ -176,14 +172,14 @@ async function renderRooms(list: unknown[]) {
   mocks.transactionsList.mockResolvedValue({ transactions: [], discrepancies: [] })
   render(<TransactionsPage />)
   await screen.findByRole('heading', { name: 'Новая операция' })
-  await waitFor(() => expect((selectAt(1) as HTMLSelectElement).value).toBe('1'))
+  await waitFor(() => expect(selectValue('Рум')).toBe('Bybit · USD'))
   return userEvent.setup()
 }
 
-async function typeExactCredited(user: ReturnType<typeof userEvent.setup>) {
-  await user.selectOptions(selectAt(0), 'transfer')
-  await user.selectOptions(selectAt(1), '1')
-  await user.selectOptions(selectAt(2), '2')
+async function typeExactCredited(user: UserEvent) {
+  await pickOption(user, 'Тип', 'Перевод')
+  await pickOption(user, 'Откуда', 'Bybit · USD')
+  await pickOption(user, 'Куда', 'PokerDom · RUB')
   await user.type(screen.getByPlaceholderText('100.00'), '50')
   const credited = (await screen.findByPlaceholderText('₽0.00')) as HTMLInputElement
   await waitFor(() => expect(credited.value).toBe(formatUnits(435100)))
@@ -198,7 +194,7 @@ describe('stale exact amount after the currency pair changes', () => {
     const user = await renderRooms([usdRoom, rubRoom, usdRoom2])
     await typeExactCredited(user)
 
-    await user.selectOptions(selectAt(2), '3')
+    await pickOption(user, 'Куда', 'GG · USD')
     expect(screen.queryByPlaceholderText('₽0.00')).toBeNull()
 
     await user.click(screen.getByRole('button', { name: 'Добавить' }))
@@ -213,7 +209,7 @@ describe('stale exact amount after the currency pair changes', () => {
     const user = await renderRooms([usdRoom, rubRoom, rubRoom2])
     await typeExactCredited(user)
 
-    await user.selectOptions(selectAt(1), '4')
+    await pickOption(user, 'Откуда', 'PokerStars · RUB')
     expect(screen.queryByPlaceholderText('₽0.00')).toBeNull()
 
     await user.click(screen.getByRole('button', { name: 'Добавить' }))
@@ -259,7 +255,7 @@ describe('stale exact amount after the currency pair changes', () => {
     const credited = (await screen.findByPlaceholderText('₽0.00')) as HTMLInputElement
     await waitFor(() => expect(credited.value).toBe('4247.59'))
 
-    await user.selectOptions(selectAt(2), '3')
+    await pickOption(user, 'Куда', 'GG · USD')
     expect(screen.queryByPlaceholderText('₽0.00')).toBeNull()
 
     await user.click(screen.getByRole('button', { name: 'Сохранить' }))
@@ -275,7 +271,7 @@ describe('stale exact amount after the currency pair changes', () => {
 describe('подсказка курса в форме перевода', () => {
   it('пока сумма отправки не введена — нейтральный текст, без «нет данных»', async () => {
     await renderLoaded()
-    await chooseTransfer('1', '2')
+    await chooseTransfer('Bybit · USD', 'PokerDom · RUB')
     expect(await screen.findByText('Введите сумму перевода: подставим расчёт по курсу программы')).toBeTruthy()
     expect(mocks.suggest).not.toHaveBeenCalled()
     expect(document.body.textContent).not.toMatch(/нет данных/)
@@ -284,7 +280,7 @@ describe('подсказка курса в форме перевода', () => {
 
   it('известный курс: «Курс программы: X», «по вашей сумме» — только при введённом зачислении', async () => {
     await renderLoaded()
-    const user = await chooseTransfer('1', '2')
+    const user = await chooseTransfer('Bybit · USD', 'PokerDom · RUB')
     await user.type(screen.getByPlaceholderText('100.00'), '50')
     expect(await screen.findByText(/Курс программы: 87\.02 · по вашей сумме: 87\.02/)).toBeTruthy()
 
@@ -298,7 +294,7 @@ describe('подсказка курса в форме перевода', () => {
   it('курса на дату нет: просим вписать сумму зачисления вручную', async () => {
     mocks.suggest.mockResolvedValue({ rate: null, suggestedAmount: null })
     await renderLoaded()
-    const user = await chooseTransfer('1', '2')
+    const user = await chooseTransfer('Bybit · USD', 'PokerDom · RUB')
     await user.type(screen.getByPlaceholderText('100.00'), '50')
     expect(await screen.findByText('Курса программы на эту дату нет: впишите сумму зачисления вручную')).toBeTruthy()
     expect(mocks.suggest).toHaveBeenCalled()

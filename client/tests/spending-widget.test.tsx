@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SpendingWidget } from '../src/components/SpendingWidget'
 import TransactionsPage from '../src/pages/Transactions'
 import { emptyMoneyOverview } from './setup'
+import { pickOption, selectValue } from './select-helper'
 import type { MoneyOverview, Room } from '../src/lib/types'
 
 const mocks = vi.hoisted(() => ({
@@ -175,9 +176,7 @@ describe('период виджета', () => {
     await screen.findByText('Куда уходят деньги')
     await waitFor(() => expect(mocks.overview).toHaveBeenCalledTimes(1))
 
-    const historyType = screen.getAllByRole('combobox').find((el) => (el as HTMLSelectElement).options[0]?.text === 'Все типы')
-    if (!historyType) throw new Error('не найден фильтр типа в истории')
-    await userEvent.setup().selectOptions(historyType, 'withdraw')
+    await pickOption(userEvent.setup(), 'Фильтр по типу', 'Вывод')
     await waitFor(() => expect(mocks.transactionsList).toHaveBeenCalled())
     expect(mocks.overview).toHaveBeenCalledTimes(1)
     expect(mocks.overview).toHaveBeenCalledWith('2026-11-01', '2026-11-10')
@@ -549,7 +548,7 @@ describe('перезапрос после правок операций', () => 
   it('после добавления операции', async () => {
     await renderPage()
     const user = userEvent.setup()
-    await waitFor(() => expect((screen.getAllByRole('combobox')[1] as HTMLSelectElement).value).toBe('9'))
+    await waitFor(() => expect(selectValue('Рум')).toBe('Bybit · USD'))
     await user.type(screen.getByPlaceholderText('100.00'), '50')
     await user.click(screen.getByRole('button', { name: 'Добавить' }))
     await waitFor(() => expect(mocks.create).toHaveBeenCalled())

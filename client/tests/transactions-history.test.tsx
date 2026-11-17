@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TransactionsPage from '../src/pages/Transactions'
 import { emptyMoneyOverview } from './setup'
+import { openOptionLabels, pickOption } from './select-helper'
 import type { Transaction, TransactionTotals } from '../src/lib/types'
 
 const mocks = vi.hoisted(() => ({
@@ -320,9 +321,7 @@ describe('фильтры истории по-прежнему обновляют
       discrepancies: [],
       totals: totalsFixture({ flowUsd: null, flowScope: 'none', flowMissingRateRows: 0, transfers: { count: 17, feeUsd: 2_165 }, costUsd: 2_642 })
     })
-    const historyType = screen.getAllByRole('combobox').find((el) => (el as HTMLSelectElement).options[0]?.text === 'Все типы')
-    if (!historyType) throw new Error('не найден фильтр типа')
-    await userEvent.setup().selectOptions(historyType, 'transfer')
+    await pickOption(userEvent.setup(), 'Фильтр по типу', 'Перевод')
     await waitFor(() => expect(mocks.transactionsList).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'transfer' })))
     await waitFor(() => expect(screen.queryByText(/Суммарно по фильтру/)).toBeNull())
     expect(await screen.findByText(/Переводов: 17/)).toBeTruthy()
@@ -330,10 +329,7 @@ describe('фильтры истории по-прежнему обновляют
 
   it('фильтр умеет выбрать «Бонус»', async () => {
     await renderPage(emptyTransactionTotals(), [])
-    const historyType = screen.getAllByRole('combobox').find((el) => (el as HTMLSelectElement).options[0]?.text === 'Все типы')
-    if (!historyType) throw new Error('не найден фильтр типа')
-    const user = userEvent.setup()
-    await user.selectOptions(historyType, 'bonus')
+    await pickOption(userEvent.setup(), 'Фильтр по типу', 'Бонус')
     await waitFor(() => expect(mocks.transactionsList).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'bonus' })))
   })
 })
@@ -343,7 +339,7 @@ describe('строка «Бонус» в истории', () => {
     return Array.from(row.querySelectorAll('td')) as HTMLElement[]
   }
 
-  /** «Бонус» живёт и в option'ах селектов, и в бейдже строки: нужен именно бейдж. */
+  /** «Бонус» — это и подпись выбранного списка (фильтр/форма), и бейдж строки: нужен бейдж. */
   async function bonusRow(): Promise<HTMLElement> {
     const badge = (await screen.findAllByText('Бонус')).find((el) => el.tagName === 'SPAN')
     const row = badge?.closest('tr')
@@ -396,11 +392,7 @@ describe('форма операции: тип «Бонус»', () => {
   async function openFormWithBonus() {
     await renderPage(emptyTransactionTotals(), [])
     const user = userEvent.setup()
-    const typeSelect = screen
-      .getAllByRole('combobox')
-      .find((el) => Array.from((el as HTMLSelectElement).options).some((o) => o.value === 'bonus'))
-    if (!typeSelect) throw new Error('в форме нет типа «Бонус»')
-    await user.selectOptions(typeSelect, 'bonus')
+    await pickOption(user, 'Тип', 'Бонус')
     // рум по умолчанию уже выбран (первый из списка); подсказка знака — признак режима
     expect(await screen.findByText(/По знаку суммы/)).toBeTruthy()
     return user
@@ -431,5 +423,49 @@ describe('форма операции: тип «Бонус»', () => {
     await user.click(screen.getByRole('button', { name: 'Добавить' }))
     expect(await screen.findByText(/Сумма бонуса должна быть ненулевой/)).toBeTruthy()
     expect(mocks.create).not.toHaveBeenCalled()
+  })
+})
+
+describe('выпадающие списки страницы', () => {
+  it('нативных <select> не осталось: меню рисует приложение, а не Windows', async () => {
+    await renderPage(emptyTransactionTotals(), [])
+    expect(document.querySelector('select')).toBeNull()
+    // форма (Тип, Рум, Направление) и два фильтра истории
+    expect(screen.getAllByRole('combobox')).toHaveLength(5)
+  })
+
+  it('меню тёмное, а выбранный рум красит триггер и доезжает до payload', async () => {
+    await renderPage(emptyTransactionTotals(), [])
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('combobox', { name: 'Тип' }))
+    const menu = screen.getByRole('listbox')
+    expect(menu.className).toContain('bg-slate-900')
+    // состав меню не потерялся при миграции: все пять типов, включая «Бонус»
+    expect(openOptionLabels()).toEqual(['Депозит', 'Вывод', 'Казино', 'Бонус', 'Перевод'])
+    await user.click(screen.getByRole('option', { name: 'Депозит' }))
+
+    await pickOption(user, 'Рум', 'PokerDom · RUB')
+    expect((screen.getByRole('combobox', { name: 'Рум' }) as HTMLElement).style.color).toBe('rgb(110, 231, 183)')
+
+    await user.type(screen.getByPlaceholderText('100.00'), '50')
+    await user.click(screen.getByRole('button', { name: 'Добавить' }))
+    await waitFor(() =>
+      expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ type: 'deposit', roomId: 2, amount: 5000 }))
+    )
+  })
+
+  it('фильтр рума красится его цветом и чистится обратно на «Все румы»', async () => {
+    await renderPage(emptyTransactionTotals(), [])
+    const user = userEvent.setup()
+    const filter = () => screen.getByRole('combobox', { name: 'Фильтр по руму' })
+
+    await pickOption(user, 'Фильтр по руму', 'Bybit')
+    expect((filter() as HTMLElement).style.color).toBe('rgb(241, 245, 249)')
+    await waitFor(() => expect(mocks.transactionsList).toHaveBeenLastCalledWith(expect.objectContaining({ roomId: 9 })))
+
+    await pickOption(user, 'Фильтр по руму', 'Все румы')
+    expect((filter() as HTMLElement).style.color).toBe('')
+    await waitFor(() => expect(mocks.transactionsList).toHaveBeenLastCalledWith(expect.objectContaining({ roomId: undefined })))
   })
 })
