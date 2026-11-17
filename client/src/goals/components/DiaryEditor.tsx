@@ -12,6 +12,7 @@ import Placeholder from '@tiptap/extension-placeholder'
 import Text from '@tiptap/extension-text'
 import Underline from '@tiptap/extension-underline'
 import { TextStyle, FontSize } from '@tiptap/extension-text-style'
+import { Select } from '../../components/Select'
 import { isDiaryHtml, sanitizeDiaryHtml } from '../diaryHtml'
 
 const HIGHLIGHT_COLORS = [
@@ -23,6 +24,10 @@ const HIGHLIGHT_COLORS = [
 
 const FONT_SIZES = [8, 10, 12, 14, 16, 18, 20]
 const DEFAULT_FONT_SIZE = 16
+
+/** Компактный триггер в ряду кнопок тулбара: те же отступы и кегль, что у соседей. */
+const SIZE_TRIGGER_CLS =
+  'cursor-pointer gap-1 rounded-md border border-slate-700/70 bg-slate-900/70 px-1.5 py-1 text-xs tabular-nums text-slate-300 outline-none transition hover:bg-slate-800 focus:border-indigo-400/70'
 
 const EXTENSIONS = [
   Document,
@@ -213,19 +218,13 @@ export function DiaryEditor({ initialContent, onChange, ariaLabel, autofocus = f
 
         <Divider />
 
-        <select
-          aria-label="Размер шрифта"
-          title="Размер шрифта"
+        <Select
+          ariaLabel="Размер шрифта"
+          triggerCls={SIZE_TRIGGER_CLS}
           value={fontSizeValue}
-          onChange={(event) => applyFontSize(event.target.value)}
-          className="cursor-pointer rounded-md border border-slate-700/70 bg-slate-900/70 px-1.5 py-1 text-xs tabular-nums text-slate-300 outline-none transition hover:bg-slate-800 focus:border-indigo-400/70"
-        >
-          {FONT_SIZES.map((size) => (
-            <option key={size} value={size}>
-              {size}
-            </option>
-          ))}
-        </select>
+          onValueChange={applyFontSize}
+          options={FONT_SIZES.map((size) => ({ value: String(size), label: String(size) }))}
+        />
 
         <Divider />
 

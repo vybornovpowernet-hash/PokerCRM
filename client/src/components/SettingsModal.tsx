@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { Select } from './Select'
 import type { AppVersionInfo, UpdateCheckResult } from '../lib/types'
 
 const HOURS = Array.from({ length: 13 }, (_, h) => h)
 
+/** Фон в модалке сплошной (карточка светлее), поэтому не общий `inputCls`, а локальный набор. */
 const selectCls =
-  'w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-slate-500 disabled:opacity-50'
+  'rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50'
 
 export function GearIcon() {
   return (
@@ -96,24 +98,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <label className="mt-5 block">
+        <div className="mt-5">
           <span className="mb-1 block text-sm text-slate-300">Начало игровых суток</span>
           <span className="mb-2 block text-xs text-slate-500">
             Турниры, начавшиеся раньше этого часа, записываются в предыдущий день — чтобы ночная сессия после полуночи не рвалась на два дня.
           </span>
-          <select
-            className={selectCls}
-            value={dayStartHour ?? 0}
+          <Select
+            ariaLabel="Начало игровых суток"
+            triggerCls={selectCls}
+            value={String(dayStartHour ?? 0)}
             disabled={dayStartHour === null || saving}
-            onChange={(e) => change(Number(e.target.value))}
-          >
-            {HOURS.map((h) => (
-              <option key={h} value={h}>
-                {String(h).padStart(2, '0')}:00
-              </option>
-            ))}
-          </select>
-        </label>
+            onValueChange={(v) => change(Number(v))}
+            options={HOURS.map((h) => ({ value: String(h), label: `${String(h).padStart(2, '0')}:00` }))}
+          />
+        </div>
 
         <div className="mt-3 flex h-5 items-center text-xs">
           {error ? (

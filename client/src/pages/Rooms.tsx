@@ -10,6 +10,7 @@ import {
   type RoomTemplate
 } from '../lib/types'
 import RoomNameCombobox from '../components/RoomNameCombobox'
+import { Select } from '../components/Select'
 import { formatAmount } from '../lib/money'
 import { onBalancesChanged } from '../lib/events'
 
@@ -213,23 +214,21 @@ export default function RoomsPage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-xs text-slate-400">Валюта кассы</label>
-              <select className={inputCls} value={form.cashCurrency} onChange={(e) => setForm({ ...form, cashCurrency: e.target.value })}>
-                {COMMON_CURRENCIES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
+              <Select
+                ariaLabel="Валюта кассы"
+                value={form.cashCurrency}
+                onValueChange={(v) => setForm({ ...form, cashCurrency: v })}
+                options={COMMON_CURRENCIES.map((c) => ({ value: c, label: c }))}
+              />
             </div>
             <div>
               <label className="mb-1 block text-xs text-slate-400">Валюта турниров</label>
-              <select className={inputCls} value={form.tournamentCurrency} onChange={(e) => setForm({ ...form, tournamentCurrency: e.target.value })}>
-                {COMMON_CURRENCIES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
+              <Select
+                ariaLabel="Валюта турниров"
+                value={form.tournamentCurrency}
+                onValueChange={(v) => setForm({ ...form, tournamentCurrency: v })}
+                options={COMMON_CURRENCIES.map((c) => ({ value: c, label: c }))}
+              />
             </div>
           </div>
           <label className="flex items-center gap-2 text-sm text-slate-300">

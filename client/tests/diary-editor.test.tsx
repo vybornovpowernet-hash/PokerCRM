@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { DiaryEditor } from '../src/goals/components/DiaryEditor'
 import { sanitizeDiaryHtml } from '../src/goals/diaryHtml'
+import { clickOption, openOptionLabels } from './select-helper'
 
 describe('DiaryEditor режим только для чтения', () => {
   it('блокирует ввод и панель, не пересоздавая редактор', () => {
@@ -85,7 +86,7 @@ describe('DiaryEditor toolbar', () => {
     expect(bold.getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('exposes the formatting controls with Russian labels', () => {
+  it('exposes the formatting controls with Russian labels', async () => {
     render(<DiaryEditor ariaLabel="Заметка в дневник" initialContent="" onChange={() => undefined} />)
 
     expect(screen.getByRole('toolbar', { name: 'Форматирование' })).toBeTruthy()
@@ -95,9 +96,10 @@ describe('DiaryEditor toolbar', () => {
     expect(screen.getByRole('button', { name: 'Выделить маркером' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Палитра маркера' })).toBeTruthy()
 
-    const size = screen.getByRole('combobox', { name: 'Размер шрифта' })
-    const options = Array.from(size.querySelectorAll('option')).map((option) => option.value)
-    expect(options).toEqual(['8', '10', '12', '14', '16', '18', '20'])
+    // состав списка виден только когда он открыт: у кастомного Select опции в DOM, а не в `<option>`
+    await userEvent.setup().click(screen.getByRole('combobox', { name: 'Размер шрифта' }))
+    expect(openOptionLabels()).toEqual(['8', '10', '12', '14', '16', '18', '20'])
+    expect(document.querySelector('select')).toBeNull()
   })
 
   it('loads existing markup into the editor', () => {
@@ -128,7 +130,7 @@ describe('DiaryEditor toolbar', () => {
     await user.click(editor)
     await user.type(editor, 'крупный')
     await user.keyboard('{Control>}a{/Control}')
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Размер шрифта' }), '18')
+    await clickOption(user, 'Размер шрифта', '18')
 
     expect(onChange).toHaveBeenLastCalledWith(expect.stringContaining('font-size: 18px'))
   })
@@ -139,12 +141,11 @@ describe('DiaryEditor toolbar', () => {
     render(<DiaryEditor ariaLabel="Заметка в дневник" initialContent="" onChange={onChange} />)
 
     const editor = screen.getByLabelText('Заметка в дневник')
-    const size = screen.getByRole('combobox', { name: 'Размер шрифта' })
     await user.click(editor)
     await user.type(editor, 'обычный')
     await user.keyboard('{Control>}a{/Control}')
-    await user.selectOptions(size, '18')
-    await user.selectOptions(size, '16')
+    await clickOption(user, 'Размер шрифта', '18')
+    await clickOption(user, 'Размер шрифта', '16')
 
     expect(onChange).toHaveBeenLastCalledWith(expect.not.stringContaining('font-size'))
   })

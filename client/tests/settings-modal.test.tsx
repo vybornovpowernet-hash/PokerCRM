@@ -2,6 +2,10 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsModal } from '../src/components/SettingsModal'
+import { openOptionLabels, pickOption, selectTrigger, selectValue } from './select-helper'
+
+/** Дефолт модалки: ровно те же 13 значений, что отдаёт серверный `dayStartHour` 0..12. */
+const HOURS_LABELS = Array.from({ length: 13 }, (_, h) => `${String(h).padStart(2, '0')}:00`)
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -47,9 +51,13 @@ describe('SettingsModal', () => {
     mocks.get.mockResolvedValue({ dayStartHour: 6 })
     render(<SettingsModal onClose={() => undefined} />)
 
-    const select = (await screen.findByRole('combobox')) as HTMLSelectElement
-    expect(select.value).toBe('6')
-    expect(screen.getAllByRole('option')).toHaveLength(13)
+    // раньше проверяли `select.value` и 13 `<option>` в DOM; теперь значение — подпись триггера,
+    // а состав меню виден только когда список открыт
+    await waitFor(() => expect(selectValue('Начало игровых суток')).toBe('06:00'))
+    await userEvent.setup().click(selectTrigger('Начало игровых суток'))
+    expect(openOptionLabels()).toEqual(HOURS_LABELS)
+    expect(screen.getByRole('listbox').className).toContain('bg-slate-900')
+    expect(document.querySelector('select')).toBeNull()
   })
 
   it('saves the new boundary on change', async () => {
@@ -58,11 +66,28 @@ describe('SettingsModal', () => {
     const user = userEvent.setup()
     render(<SettingsModal onClose={() => undefined} />)
 
-    const select = await screen.findByRole('combobox')
-    await user.selectOptions(select, '6')
+    await pickOption(user, 'Начало игровых суток', '06:00')
 
     await waitFor(() => expect(mocks.update).toHaveBeenCalledWith(6))
     expect(screen.queryByText('Сохранено')).not.toBeNull()
+  })
+
+  it('Escape закрывает список, а не модалку: второй Escape закрывает модалку', async () => {
+    const onClose = vi.fn()
+    mocks.get.mockResolvedValue({ dayStartHour: 0 })
+    const user = userEvent.setup()
+    render(<SettingsModal onClose={onClose} />)
+    await waitFor(() => expect(selectValue('Начало игровых суток')).toBe('00:00'))
+
+    // у нативного `<select>` Escape закрывал только меню и до страницы не доходил —
+    // кастомный список обязан сохранять это поведение, иначе настройка терялась бы от Esc
+    await user.click(selectTrigger('Начало игровых суток'))
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(onClose).not.toHaveBeenCalled()
+
+    await user.keyboard('{Escape}')
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 
   it('shows the current application version', async () => {
