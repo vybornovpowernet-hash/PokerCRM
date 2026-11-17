@@ -44,8 +44,11 @@ const TYPEAHEAD_MS = 700
  * тёмной темы. Единственный способ управлять его цветами — свой список.
  *
  * Позиционирование — `absolute` внутри `relative`-обёртки (тот же приём, что в
- * `RoomNameCombobox`): контейнеры формы и фильтров не используют `overflow-hidden` и
- * `backdrop-blur`, поэтому портал, как в `HabitPopover`, здесь не нужен.
+ * `RoomNameCombobox` и в палитре маркера тулбара): формы, фильтры и модалка не используют
+ * `overflow-hidden`, поэтому портал, как в `HabitPopover`, здесь не нужен. Одно место —
+ * раскрытая карточка цели (`GoalCard` и внутренний `Collapse` режут overflow): там меню может
+ * быть обрезано нижним краем карточки. Ровно тот же риск уже несёт соседняя палитра маркера,
+ * поэтому решается вместе с ней (портал + `getBoundingClientRect`), а не заранее.
  */
 export function Select({ value, onValueChange, options, ariaLabel, placeholder, disabled, className, triggerCls }: SelectProps) {
   const [open, setOpen] = useState(false)
