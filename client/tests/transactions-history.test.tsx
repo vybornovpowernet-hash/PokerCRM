@@ -347,7 +347,7 @@ describe('строка «Бонус» в истории', () => {
     return row as HTMLElement
   }
 
-  it('риcует бейдж типа, направление по знаку и зелёный плюс', async () => {
+  it('рисует бейдж типа, направление по знаку и зелёный плюс', async () => {
     await renderPage(emptyTransactionTotals(), [tx({ id: 30, type: 'bonus', amount: 5_000, amountUsd: 5_000 })])
     const row = await bonusRow()
     const [date, room, type, direction, amount, fee] = cells(row)

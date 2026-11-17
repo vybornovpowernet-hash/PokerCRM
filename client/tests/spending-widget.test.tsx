@@ -46,7 +46,7 @@ const rooms: Room[] = [
 
 /**
  * Числа зеркалят серверный ответ: `costs.totalUsd` сложил сервер, клиент только
- * показывает. kurсовая разница входит в «Комиссии» (411 + 263 = 674).
+ * показывает. Курсовая разница входит в «Комиссии» (411 + 263 = 674).
  */
 function overviewFixture(overrides: Partial<MoneyOverview> = {}): MoneyOverview {
   const base = emptyMoneyOverview()
