@@ -210,7 +210,7 @@ export function sessionsInRange(dateFrom: string, dateTo: string): SessionDay[] 
     const bonusByKey = new Map<string, number>()
     // Один проход по знаковым строкам дня. Игровым день делают КАЗИНО (и турниры),
     // но не бонус: рейкбек — не игра. Это безопасно именно потому, что `lastByRoom`
-    // в цикле ниже сдвигается ДО проверки `gaming`: carry-forward continues течь через
+    // в цикле ниже сдвигается ДО проверки `gaming`: carry-forward течёт через
     // спрятанный бонусный день, и дельта следующей реальной сессии меряется от его же
     // auto-записи. Убрать это свойство означало бы выдать остаток −B фантомным окном.
     for (const row of getDb()
